@@ -3,3 +3,4 @@ pytest
 flask
 altair
 psycopg2
+streamlit
