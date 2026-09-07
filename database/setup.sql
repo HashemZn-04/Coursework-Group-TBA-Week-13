@@ -17,6 +17,7 @@ CREATE TABLE receipts (
     submitter VARCHAR(60),
     raw_file_reference VARCHAR(255),
     source_channel VARCHAR(60),
+    status VARCHAR(30),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
