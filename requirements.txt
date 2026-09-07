@@ -3,4 +3,5 @@ pytest
 flask
 altair
 psycopg2
+pandas
 streamlit
