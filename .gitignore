@@ -2,3 +2,6 @@ data/
 .venv/
 __pycache__/
 *.pyc
+service_account.json
+.streamlit/secrets.toml
+.expense-intelligence-*

@@ -44,48 +44,30 @@ git commit -m "Add large asset via Git LFS"
 git push origin main
 ```
 
-## Database (PostgreSQL)
+## Data store (Google Sheets)
 
-### First time setup (macOS)
+As of 2026-09-09 the system of record is a shared Google Sheet, not Postgres — faster to stand up for a one-week build and everyone can see the data live:
+https://docs.google.com/spreadsheets/d/1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE/edit
 
-```bash
-brew install postgresql@17
-brew services start postgresql@17
-```
+It has three tabs — `Receipts`, `Verdicts`, `Decisions` — mirroring the original `database/` schema field-for-field. `database/setup.sql`, `database/seed.py`, and `database/queries.sql` are kept for reference but are no longer used.
 
-### Create the schema
+### One-time credentials setup
 
-```bash
-psql -h localhost -U "$(whoami)" -d postgres -f database/setup.sql
-```
+1. Create a Google Cloud service account with the Sheets + Drive APIs enabled, download its JSON key.
+2. Share the sheet above with the service account's email as an **Editor**.
+3. Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and paste in the key's fields.
 
-This drops and recreates the `receipts` database with the `receipts`, `verdicts`, and `decisions` tables (`database/setup.sql`).
-
-### Seed sample data
-
-```bash
-source .venv/bin/activate
-python database/seed.py
-```
-
-Loads the 20 real annotated receipts from `data/annotations.xml` into the database. Re-runnable, truncates and reloads each time.
-
-### Connect manually
-
-```bash
-psql -h localhost -U "$(whoami)" -d receipts
-```
-
-Useful queries are in `database/queries.sql`.
+Full click-by-click steps: `ticket_work/epic_3_tickets.md` ("One-time setup" section).
 
 ## Dashboard (Streamlit)
 
 ```bash
 source .venv/bin/activate
+pip install -r requirements.txt
 streamlit run streamlit_app.py
 ```
 
-Opens at `http://localhost:8501`. Pages (Spend Overview, Review Queue, Expense Browser) are auto-listed from `pages/`. Currently reads mock data straight from `data/annotations.xml` via `dashboard/data.py`, not yet from the Postgres database.
+Opens at `http://localhost:8501`. Pages (Spend Overview, Review Queue, Expense Browser) are auto-listed from `pages/`. Reads and writes the Google Sheet above via `dashboard/data.py`; Review Queue's Approve/Reject buttons write real decisions back to the sheet.
 
 ## Project structure
 

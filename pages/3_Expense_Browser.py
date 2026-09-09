@@ -1,21 +1,26 @@
 import pandas as pd
 import streamlit as st
 
-from dashboard.data import load_mock_receipts
+from dashboard.data import load_expenses
 
 st.title("Expense Browser")
 
-df = load_mock_receipts()
+df = load_expenses()
+
+if df.empty:
+    st.info("No receipts in the sheet yet. Submit a receipt via Slack, or add a test row to the "
+            "Receipts tab: https://docs.google.com/spreadsheets/d/1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE")
+    st.stop()
 
 col1, col2, col3 = st.columns(3)
 date_range = col1.date_input(
     "Date range", value=(df["date"].min(), df["date"].max())
 )
 categories = col2.multiselect(
-    "Category", options=sorted(df["category"].unique()), default=None
+    "Category", options=sorted(df["category"].dropna().unique()), default=None
 )
 submitters = col3.multiselect(
-    "Submitter", options=sorted(df["submitter"].unique()), default=None
+    "Submitter", options=sorted(df["submitter"].dropna().unique()), default=None
 )
 min_amount, max_amount = st.slider(
     "Amount range",

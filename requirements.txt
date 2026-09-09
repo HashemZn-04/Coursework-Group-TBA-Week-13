@@ -5,3 +5,5 @@ altair
 psycopg2
 pandas
 streamlit
+gspread
+google-auth

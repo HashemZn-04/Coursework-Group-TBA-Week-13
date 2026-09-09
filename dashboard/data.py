@@ -1,96 +1,130 @@
 """
-Mock data loader for E1 (dashboard shell).
+Data access layer for the dashboard, backed by the shared Google Sheet
+(https://docs.google.com/spreadsheets/d/1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE)
+instead of Postgres. The sheet has three tabs — Receipts, Verdicts, Decisions —
+mirroring the original database/setup.sql design field-for-field.
 
-Parses data/annotations.xml (20 real hand-labeled receipts) into a DataFrame
-shaped like the B3 schema. Category/submitter/verdict are NOT in the real
-annotations, so they're fabricated deterministically here as placeholders
-until C3 (Policy Match) and real submissions exist. Replace load_mock_receipts()
-with a real DB query once C1/C6 are live.
+Requires .streamlit/secrets.toml with a [gcp_service_account] block and a
+spreadsheet_id (see .streamlit/secrets.toml.example for the template, and
+ticket_work/epic_3_tickets.md for the one-time Google Cloud setup steps).
 """
-import re
-import xml.etree.ElementTree as ET
-from datetime import datetime
-from pathlib import Path
+import json
+from datetime import datetime, timezone
 
+import gspread
 import pandas as pd
+import streamlit as st
+from google.oauth2.service_account import Credentials
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-ANNOTATIONS_PATH = DATA_DIR / "annotations.xml"
+DEFAULT_SPREADSHEET_ID = "1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE"
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.file"]
 
-_CATEGORIES = ["travel", "software", "meals", "office_supplies", "other"]
-_SUBMITTERS = ["amara.osei", "j.chen", "r.patel", "l.garcia", "m.osei"]
-_DATE_FORMATS = ["%m/%d/%y %H:%M:%S", "%m-%d-%Y %I:%M%p", "%m/%d/%Y", "%m-%d-%Y"]
+RECEIPT_HEADERS = ["receipt_id", "receipt_date", "merchant", "line_items", "total_amount", "tax",
+                    "payment_method", "category", "currency", "submitter", "raw_file_reference",
+                    "source_channel", "status", "created_at", "updated_at"]
+VERDICT_HEADERS = ["verdict_id", "receipt_id", "verdict", "reason", "created_at"]
+DECISION_HEADERS = ["decision_id", "receipt_id", "decision", "decided_by", "decided_at", "notes"]
 
-
-def _parse_date(text: str) -> str:
-    text = (text or "").strip()
-    for fmt in _DATE_FORMATS:
-        try:
-            return datetime.strptime(text, fmt).date().isoformat()
-        except ValueError:
-            continue
-    return None
+DECIDER = "amara.osei"  # sole approver per discovery notes — no delegation in v1
 
 
-def _parse_total(text: str) -> float:
-    match = re.search(r"(\d+\.\d{2})", text or "")
-    return float(match.group(1)) if match else None
+@st.cache_resource
+def _client():
+    if "gcp_service_account" not in st.secrets:
+        st.error(
+            "Missing Google Sheets credentials. Copy .streamlit/secrets.toml.example to "
+            ".streamlit/secrets.toml and fill in your service account key "
+            "(see ticket_work/epic_3_tickets.md, section 'One-time setup')."
+        )
+        st.stop()
+    creds = Credentials.from_service_account_info(dict(st.secrets["gcp_service_account"]), scopes=SCOPES)
+    return gspread.authorize(creds)
 
 
-def _mock_verdict(total: float, category: str) -> str:
-    """Placeholder rule until C3's Governance Prompt exists."""
-    if total is None:
-        return "flagged"
-    if category == "software" or total > 500:
-        return "high_risk"
-    if total > 100:
-        return "flagged"
-    return "compliant"
+def _spreadsheet_id() -> str:
+    return st.secrets.get("spreadsheet_id", DEFAULT_SPREADSHEET_ID)
 
 
-def load_mock_receipts() -> pd.DataFrame:
-    tree = ET.parse(ANNOTATIONS_PATH)
-    root = tree.getroot()
+def _ensure_ws(name: str, headers: list[str]):
+    ss = _client().open_by_key(_spreadsheet_id())
+    try:
+        ws = ss.worksheet(name)
+    except gspread.WorksheetNotFound:
+        ws = ss.add_worksheet(title=name, rows=1000, cols=len(headers))
+    if ws.row_values(1) != headers:
+        ws.update(values=[headers], range_name="A1")
+    return ws
 
-    rows = []
-    for image in root.findall("image"):
-        image_id = int(image.get("id"))
-        merchant, total, date, items = None, None, None, []
 
-        for box in image.findall("box"):
-            label = box.get("label")
-            text_attr = box.find("attribute[@name='text']")
-            text = text_attr.text if text_attr is not None else None
+def receipts_ws():
+    return _ensure_ws("Receipts", RECEIPT_HEADERS)
 
-            if label == "shop":
-                merchant = text
-            elif label == "total":
-                total = _parse_total(text)
-            elif label == "date_time":
-                date = _parse_date(text)
-            elif label == "item":
-                items.append({"description": text, "amount": None, "quantity": 1})
 
-        category = _CATEGORIES[image_id % len(_CATEGORIES)]
-        submitter = _SUBMITTERS[image_id % len(_SUBMITTERS)]
-        verdict = _mock_verdict(total, category)
-        status = "approved" if verdict == "compliant" else "pending_review"
+def verdicts_ws():
+    return _ensure_ws("Verdicts", VERDICT_HEADERS)
 
-        rows.append({
-            "receipt_id": f"r-{image_id:04d}",
-            "merchant": merchant or "UNKNOWN",
-            "date": date,
-            "category": category,
-            "line_items": items,
-            "total": total,
-            "currency": "USD",
-            "submitter": submitter,
-            "source_channel": "slack",
-            "raw_file_ref": image.get("name"),
-            "verdict": verdict,
-            "status": status,
-        })
 
-    df = pd.DataFrame(rows)
-    df["date"] = pd.to_datetime(df["date"])
+def decisions_ws():
+    return _ensure_ws("Decisions", DECISION_HEADERS)
+
+
+def _next_id(ws, id_col: str) -> int:
+    records = ws.get_all_records()
+    return max((int(r[id_col]) for r in records if str(r[id_col]).strip()), default=0) + 1
+
+
+def load_receipts() -> pd.DataFrame:
+    records = receipts_ws().get_all_records()
+    df = pd.DataFrame(records, columns=RECEIPT_HEADERS)
+    if df.empty:
+        return df
+    df["line_items"] = df["line_items"].apply(lambda v: json.loads(v) if v else [])
+    df["date"] = pd.to_datetime(df["receipt_date"], errors="coerce")
+    df["total"] = pd.to_numeric(df["total_amount"], errors="coerce")
+    df["receipt_id"] = pd.to_numeric(df["receipt_id"], errors="coerce").astype("Int64")
     return df
+
+
+def load_verdicts() -> pd.DataFrame:
+    return pd.DataFrame(verdicts_ws().get_all_records(), columns=VERDICT_HEADERS)
+
+
+def load_decisions() -> pd.DataFrame:
+    return pd.DataFrame(decisions_ws().get_all_records(), columns=DECISION_HEADERS)
+
+
+def load_expenses() -> pd.DataFrame:
+    """One row per receipt, merged with its latest verdict. Replaces the old
+    mock-data load_mock_receipts() — same shape (receipt_id, date, merchant,
+    category, total, submitter, verdict, status, ...) but sourced from the
+    live sheet instead of data/annotations.xml."""
+    receipts = load_receipts()
+    if receipts.empty:
+        return receipts.assign(verdict=pd.Series(dtype="object"), reason=pd.Series(dtype="object"))
+
+    verdicts = load_verdicts()
+    if verdicts.empty:
+        receipts["verdict"] = None
+        receipts["reason"] = None
+        return receipts
+
+    verdicts["receipt_id"] = pd.to_numeric(verdicts["receipt_id"], errors="coerce")
+    latest = verdicts.sort_values("created_at").groupby("receipt_id", as_index=False).tail(1)
+    return receipts.merge(latest[["receipt_id", "verdict", "reason"]], on="receipt_id", how="left")
+
+
+def record_decision(receipt_id: int, decision: str, decided_by: str = DECIDER, notes: str = "") -> int:
+    """Appends to Decisions and updates the receipt's status in place. decision
+    is one of 'approved' | 'rejected' | 'escalated'."""
+    ws = decisions_ws()
+    new_id = _next_id(ws, "decision_id")
+    now = datetime.now(timezone.utc).isoformat()
+    ws.append_row([new_id, receipt_id, decision, decided_by, now, notes], value_input_option="USER_ENTERED")
+
+    r_ws = receipts_ws()
+    id_col = RECEIPT_HEADERS.index("receipt_id") + 1
+    cell = r_ws.find(str(receipt_id), in_column=id_col)
+    if cell:
+        r_ws.update_cell(cell.row, RECEIPT_HEADERS.index("status") + 1, decision)
+        r_ws.update_cell(cell.row, RECEIPT_HEADERS.index("updated_at") + 1, now)
+    return new_id
