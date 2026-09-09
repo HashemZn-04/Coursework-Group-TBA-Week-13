@@ -79,12 +79,27 @@ def _next_id(ws, id_col: str) -> int:
     return max(ids, default=0) + 1
 
 
+def _parse_line_items(value):
+    """Line items arrive as a JSON string, but the sheet is hand-editable and
+    n8n has written malformed values before now — a bad cell must not take the
+    whole dashboard down."""
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
 def load_receipts() -> pd.DataFrame:
     records = receipts_ws().get_all_records()
     df = pd.DataFrame(records, columns=RECEIPT_HEADERS)
     if df.empty:
         return df
-    df["line_items"] = df["line_items"].apply(lambda v: json.loads(v) if v else [])
+    df["line_items"] = df["line_items"].apply(_parse_line_items)
     df["date"] = pd.to_datetime(df["receipt_date"], errors="coerce")
     df["total"] = pd.to_numeric(df["total_amount"], errors="coerce")
     df["receipt_id"] = pd.to_numeric(df["receipt_id"], errors="coerce").astype("Int64")
@@ -114,9 +129,16 @@ def load_expenses() -> pd.DataFrame:
         receipts["reason"] = None
         return receipts
 
-    verdicts["receipt_id"] = pd.to_numeric(verdicts["receipt_id"], errors="coerce")
-    latest = verdicts.sort_values("created_at").groupby("receipt_id", as_index=False).tail(1)
-    return receipts.merge(latest[["receipt_id", "verdict", "reason"]], on="receipt_id", how="left")
+    # Match load_receipts()'s Int64 so the merge keys line up; unparseable IDs
+    # (n8n has written literal "=ROW()-1" into this column) become NA and simply
+    # fail to match rather than raising.
+    verdicts["receipt_id"] = pd.to_numeric(
+        verdicts["receipt_id"], errors="coerce").astype("Int64")
+    latest = (verdicts.dropna(subset=["receipt_id"])
+              .sort_values("created_at")
+              .groupby("receipt_id", as_index=False).tail(1))
+    return receipts.merge(latest[["receipt_id", "verdict", "reason"]],
+                          on="receipt_id", how="left")
 
 
 def record_decision(receipt_id: int, decision: str, decided_by: str = DECIDER, notes: str = "") -> int:

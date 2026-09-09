@@ -9,12 +9,25 @@
 
 1. **C1 is done** — schema now lives as the 3 sheet tabs below instead of 3 Postgres tables. Same fields, same intent.
 2. **C3's real blocker (A3 Governance Prompt) doesn't exist as a finished artifact yet.** AA already built a working draft directly inside the n8n workflow — a generic "contextual reasonableness" system prompt plus two hardcoded rules (£2,000 CFO threshold, £250 line-manager threshold, 1-month cutoff). Real, usable v1 — just not the full handbook ruleset. Build on it rather than wait.
-3. **C2 (CPI pull) hasn't been built at all** — no cron node, no CPI/FRED/BLS reference anywhere in n8n. Technically blocks C4; workaround below unblocks you today.
+3. **C2 (CPI pull) hasn't been built at all** — no cron node, no CPI/FRED/BLS reference anywhere in n8n. It technically blocks C4; C4 now calls FRED directly and caches per process, and writes every observation it uses to a **Benchmarks** tab, which is both the workaround and the schema C2 should write into when AA builds it.
 4. **AA's n8n workflow calls OpenAI directly** from the "AI Contextual Audit" node — not a DA-owned API. An orphaned "Store Expense Record" node pair is wired to nothing, so nothing persists anywhere right now. Revised plan (see C3, 2026-09-09): rather than repoint that node, DA supplies the real governance-prompt content for it and n8n forwards its finished result to a new Flask persistence endpoint — closes the same gap without needing DA to hold an OpenAI key.
 
 Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 is AA's, C7 is Mason's.)
 
 **Recommended order:** C6 → C3 → C4 → C5.
+
+## Where each ticket stands (2026-09-09, end of DA build)
+
+| Ticket | Code | Blocked on |
+|---|---|---|
+| C1 schema | Done — three sheet tabs, `tests/test_schema_parity.py` pins the API, the dashboard and n8n's column mapping to each other | — |
+| C3 policy match | Done on the DA side: governance prompt, verdict logic, persistence, `POST /api/audit`, all tested | AA's n8n fixes (punch list below). No receipt from the real Slack upload path gets a stored verdict until those land. |
+| C4 contextual validation | **Done** — built, tested against live FRED, acceptance evidence scripted | — (C2 worked around; see C4's "Standing in for C2") |
+| C5 routing + summary | DA half done — summary generation, `/api/audit` response, Review Queue rendering | C3's persistence gap, then an end-to-end Slack run |
+| C6 query API | Done — filters, pagination, `status` widening, audit-trail endpoint | — |
+
+`pytest -q` — 88 tests, no credentials or network needed. Everything below marked
+"done" is covered by them.
 
 ---
 
@@ -165,6 +178,12 @@ Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 
 3. Test a filter: `http://localhost:5000/api/expenses?category=travel&min_amount=50`.
 4. Done once filters + pagination work against real sheet rows.
 
+**Built beyond the snippet above** (all in `api/app.py`, covered by `tests/test_app.py`):
+
+* `status=` widens the query past approved-only — `status=pending_review` for the queue, `status=all` for everything. QA needs that to sample verdicts for C7; the brief's "approved expenses queryable" stays the default.
+* `page_size` is capped at 100 and floored at 1, and `page` at 1, so a bad query string returns a sane page rather than an exception or the whole sheet.
+* `GET /api/receipts/<id>` returns the full paper trail for one receipt — the submission, every verdict against it in order, and every decision with who made it and when. That is C1's acceptance criterion as a single call, and it is what QA's D4 ticket walks to confirm nothing in the trail is missing or overwritten.
+
 ---
 
 ## C3 — Policy Match against Governance Prompt (MCP-25)
@@ -193,7 +212,16 @@ Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 
 3. Once AA applies those fixes (or you do, if you have edit access — same instructions apply either way), test with a real Slack upload of a receipt image (the original path, not the slash-command/modal one) and confirm a row lands in **both** Receipts and Verdicts, with a real numeric `receipt_id` shared between them, `status = pending_review`, and `raw_file_reference` pointing at the actual file.
 4. Done once that's true for all three risk tiers, not just high-risk — that's what actually satisfies "every ingested receipt receives a stored policy verdict."
 
-`api/app.py`'s `/api/audit`, `/api/audit`-adjacent `insert_receipt`/`insert_verdict` in `api/sheets.py`, and `map_verdict()` in `api/audit.py` still work standalone (tested with mocked payloads earlier) and remain a useful local reference for exactly what fields/shape the sheet needs — they're just not wired into the live n8n pipeline, by choice, per the earlier hosting discussion.
+### The DA side of C3, as built
+
+`POST /api/audit` is complete and tested end to end against mocked sheets. It:
+
+* accepts **either** payload shape n8n could send — the nested one the workflow carries internally (`audit_engine_input` / `contextual_audit` / `final_audit_result`), or the flat one an HTTP node placed after "Final Risk Assessment" would post. The test payloads in `tests/test_app.py` are copied from the node code in the workflow export, not invented, so the API cannot quietly drift from what n8n actually holds;
+* **trusts n8n's `risk_level` when it sends one** — n8n has already run the governance prompt, and the API must not disagree with the verdict the submitter was told in Slack. When no risk level is supplied, `final_verdict()` recomputes it from the deterministic checks plus the contextual audit. That function is a deliberate line-by-line mirror of n8n's "Final Risk Assessment" node, which makes it the executable spec QA can check that node against for C7;
+* runs C4 and folds the result into the stored reason, and generates the C5 summary;
+* writes **both** rows — Receipts *and* Verdicts — with a real incrementing numeric `receipt_id` shared between them and `status = 'pending_review'`. That is precisely the set of things AA's current Sheets node gets wrong, so if the punch list below stalls, pointing n8n at this endpoint behind a tunnel fixes all of them at once.
+
+None of that changes the blocker: as long as the live pipeline writes to the sheet through n8n's own node, the punch list above is what has to land.
 
 <details>
 <summary>Alternative: Python-side LLM call (needs an OpenAI/Anthropic key) — kept for reference, not the current path</summary>
@@ -248,47 +276,162 @@ Then `/api/audit` would call `run_contextual_audit(payload)` itself instead of t
 
 ## C4 — Contextual Validation, inflation-aware (MCP-27)
 
-**Dependencies:** C2's benchmark data (not built) — workaround below unblocks you today. The category-limit/inflation logic itself has no blocker; where it ultimately runs (n8n vs. a future API) depends on how C3's persistence gap gets resolved.
-**Software:** Same Flask app, free FRED API key, `requests`.
+> **Status (2026-09-09): built and tested.** `api/policy.py`, `api/audit.py`,
+> `POST /api/validate`, `scripts/c4_demo.py`, and 30 tests in
+> `tests/test_audit.py` + `tests/test_policy.py`. Verified against a live FRED
+> call, not just mocks.
 
-1. Get a FRED key: `fred.stlouisfed.org` → **My Account** → **Register**/sign in → **My Account → API Keys** → **Request API Key** → copy it.
-2. Add to `.gitignore`-respecting local env (e.g. export it in your shell, or add a small `.env` + `python-dotenv` just for this key — your call) as `FRED_API_KEY`.
-3. Add to `api/audit.py`:
-   ```python
-   import os, requests
-   from functools import lru_cache
+**Dependencies:** C2's benchmark data (still not built) — worked around, see below. **Can start now: done.**
+**Software:** free FRED API key, `requests`, `python-dotenv`.
 
-   @lru_cache(maxsize=1)
-   def latest_cpi():
-       r = requests.get("https://api.stlouisfed.org/fred/series/observations", params={
-           "series_id": "CPIAUCSL", "api_key": os.environ["FRED_API_KEY"],
-           "file_type": "json", "sort_order": "desc", "limit": 1,
-       })
-       return float(r.json()["observations"][0]["value"])
+### What it does
 
-   def inflation_adjusted_limit(static_limit: float, base_index: float = 255.0) -> float:
-       return round(static_limit * (latest_cpi() / base_index), 2)
+Every limit in `api/policy.py` carries the period it was last set in, traced to a
+handbook section or an addendum. `api/audit.py` re-prices that limit to today's
+CPI before comparing it to the receipt:
 
-   def good_deal_or_violation(total: float, static_limit: float) -> str:
-       adjusted = inflation_adjusted_limit(static_limit)
-       if total > static_limit and total <= adjusted:
-           return "GOOD_DEAL"
-       if total <= static_limit and total > adjusted:
-           return "POLICY_VIOLATION"
-       return "COMPLIANT" if total <= adjusted else "POLICY_VIOLATION"
-   ```
-   (No `benchmarks` sheet tab needed for the demo — `lru_cache` means one live FRED call per process run, standing in for C2's scheduled pull. When AA finishes C2, swap this for reading a `Benchmarks` tab instead.)
-4. Wire it into `/api/audit`: call `good_deal_or_violation(payload["total"], static_limit_for(audit["category"]))`, fold the result into the `reason` text written to the **Verdicts** tab — treat "Good Deal"/"Policy Violation" as reasoning detail, not a 4th verdict value (verdicts are always `compliant`/`flagged`/`high_risk`).
-5. Test the required constructed example: a receipt priced above the static 2019 limit but within the inflation-adjusted one should classify as `COMPLIANT`/`GOOD_DEAL`, not flagged. Log this example (curl request/response) — that satisfies the AC.
+```
+adjusted_limit = static_limit x (CPI_now / CPI_when_the_limit_was_written)
+```
+
+and classifies the claim as one of:
+
+| Assessment | Meaning |
+|---|---|
+| `WITHIN_LIMIT` | Inside the figure as written — no argument either way |
+| `GOOD_DEAL` | Over the stale figure, inside the re-priced one. **This is the ticket's whole point, and it does not raise a flag.** |
+| `OVER_GUIDELINE` | Over the re-priced figure, but Section 5.2 calls that figure a guideline, not a ceiling → flagged for explanation |
+| `POLICY_VIOLATION` | Over the re-priced figure on a hard limit → high risk |
+| `NO_LIMIT` | No numeric ceiling for this category; the general approval thresholds govern |
+
+The outcome is folded into the verdict's `reason` text rather than becoming a
+fourth verdict value — verdicts stay `compliant` / `flagged` / `high_risk`.
+
+### Where the numbers came from
+
+| Category | Limit | Set | Source |
+|---|---|---|---|
+| Subsistence | £46.00 / day | 2022-01 | 3.1 (£40) uplifted 15% by Addendum B |
+| Client entertainment | £75.00 / head | 2019-03 | 5.2 — a *guideline*; Addendum B deliberately skipped it, so it is the stalest live figure in the book |
+| Staff entertainment | £46.00 / head | 2022-01 | 6.2 (£40) uplifted 15% by Addendum B |
+| Software / subscriptions | £50.00 / month | 2019-03 | 7.1 (pre-approved list only — 7.2 needs manager + IT sign-off regardless of cost, which no limit check can clear) |
+| Travel, accommodation, training, office supplies, postage, misc | none | — | Governed by the approval thresholds instead |
+
+Approval thresholds (£250 line manager, £2,000 CFO) are Amara's live figures, not
+handbook ones, so they are deliberately *not* inflation-adjusted. n8n's
+"Deterministic Policy Checks" node is what enforces them.
+
+### Setup
+
+1. Get a FRED key: `fred.stlouisfed.org` → **My Account** → **API Keys** → **Request API Key**. Free and instant.
+2. `cp .env.example .env` and paste the key in as `FRED_API_KEY`.
+3. `pytest -q` — 88 tests, no credentials or network needed.
+4. `python scripts/c4_demo.py` — runs five constructed examples against live CPI.
+
+### Acceptance evidence
+
+The AC asks for "a receipt priced above a static old limit but within current
+inflation-adjusted benchmark [...] correctly classified as acceptable (and vice
+versa) — demonstrated with at least one constructed example."
+
+The headline example: **an £88-per-head client dinner.** The handbook says £75
+(Section 5.2, March 2019, never uplifted). CPI has moved 254.277 → 332.813 over
+that period, so £75 in 2019 money is **£98.16** today. £88 is over the written
+figure and comfortably under the re-priced one → `GOOD_DEAL`, not a flag.
+
+And the reverse: **£60 a day of subsistence.** The limit is £46/day (2022-01),
+re-priced to £54.18 → `POLICY_VIOLATION`, over the limit on both the old figure
+and the current one.
+
+Both are asserted in `tests/test_audit.py::test_c4_acceptance_criterion_constructed_example`
+and printed with their CPI provenance by `scripts/c4_demo.py`. Paste that script's
+output into MCP-27 — it is the artifact, and it exits non-zero if anything
+misclassifies.
+
+### Standing in for C2
+
+C2 (AA's scheduled CPI pull) still does not exist. `cpi_for()` calls FRED
+directly and caches per process, which is what the cron job would have provided.
+Two things make this safe to hand over:
+
+* Every CPI observation actually used gets written to a **Benchmarks** tab
+  (`series_id`, `period`, `value`, `fetched_at`, `source`), once per process, so
+  any past verdict can be re-checked against the index level it was decided on.
+  That tab is the shape C2 should write when AA builds it.
+* When C2 lands, point `cpi_for()` at the Benchmarks tab instead of FRED.
+  Nothing else in the module changes.
+
+### Known gaps, stated rather than hidden
+
+* **Currency is not converted.** The handbook is GBP; the sample data is USD. A
+  non-GBP claim is still compared against the GBP limit, and the result carries
+  `unconverted_currency: true` plus a sentence in the reason telling the reviewer
+  to weigh the exchange rate and local purchasing power themselves. Amara called
+  both out explicitly, so this is a real gap — closing it needs an FX rate source
+  keyed on the transaction date (Handbook 12.2).
+* **The CPI series is US (`CPIAUCSL`).** FRED's UK series (`GBRCPIALLMINMEI`)
+  stops in early 2025, which cannot answer a 2026 question. Override with
+  `CPI_SERIES_ID` if a better current UK series turns up.
+* **Attendee count is not captured.** Per-head limits therefore divide by 1
+  unless a caller passes `attendee_count`, so a shared dinner reads as an
+  overage. This is one of the schema fields Mason flagged as missing; until B3
+  captures it, a per-head overage means "ask", not "reject".
 
 ---
 
 ## C5 — High-Risk routing & natural-language summary (MCP-31)
 
-**Dependencies:** C3's verdict-persistence gap (see the punch list above) must close first — right now no verdict is ever saved, so there's nothing for Review Queue to show even for a high-risk receipt. **Software:** n8n web UI, Slack.
+> **Status (2026-09-09): the DA half is built and tested.** `api/summary.py`,
+> wired into `POST /api/audit`, surfaced in `pages/2_Review_Queue.py`, covered by
+> `tests/test_summary.py`. What remains is AA-side delivery and an end-to-end run.
 
-1. Confirm the summary reaches both surfaces: n8n's "Final Risk Assessment" already produces `contextual_summary` (from the governance-prompt LLM call) — the new "Persist to Audit API" node (C3 step 5) forwards it into `verdicts.reason`, so it's now stored and queryable via C6 too. Nothing new to add here.
-2. In n8n, confirm **"High-Risk Expense Slack Routing"**, **"Request Employee Explanation"**, **"Low Risk Compliance Feedback"** still reference `$json.final_audit_result.contextual_summary` — untouched by the C3 rewire, so this should already work.
-3. Submit a real test receipt through Slack, confirm the reply includes merchant/amount/reason matching what's now in the **Verdicts** tab.
-4. Confirm the dashboard side: the summary is now in `verdicts.reason` in the sheet, and `dashboard/data.py`'s `load_expenses()` already surfaces it to Review Queue — that's the "available to the dashboard" half of this ticket. No new dashboard code required for C5 itself.
-5. Done once a high-risk test receipt produces a Slack message *and* a row in **Verdicts** you can pull back out via `/api/expenses`.
+**Dependencies:** C3's persistence gap (the punch list above) must close before a real receipt can travel this path end to end.
+**Software:** n8n web UI, Slack, Streamlit.
+
+### What it does
+
+`build_summary()` produces one summary in two renderings from the same facts, so
+the sentence Amara reads in Slack and the one she reads in the dashboard cannot
+disagree:
+
+* `summary` — prose, stored in the Verdicts tab's `reason` column and rendered in
+  Review Queue.
+* `slack_message` — the same content in Slack mrkdwn, returned by `/api/audit` so
+  n8n's Slack node can post it verbatim.
+
+It leads with the four things the AC names — what was flagged, why, the amount,
+the submitter — because Amara's bar is "a lot of the time, it can just be a
+sentence". Deterministic flag codes are translated into English
+(`EXPENSE_OUTSIDE_ONE_MONTH_CUTOFF` → "submitted more than a month after the
+expense date, which policy auto-rejects with no exceptions"); the governance
+prompt's own free-text reasoning passes through verbatim; C4's assessment is
+appended. No second LLM call — the reasoning already exists upstream, and
+regenerating it would add latency, cost, and another thing that can hallucinate.
+
+Example output for a high-risk client dinner:
+
+> **Needs your decision**: £264.00 at The Ivy (client entertainment), submitted
+> by U04ALEX, dated 2026-08-14. Client dinner for three during the Rowan
+> engagement. Flagged because it is at or above the £2,000 CFO approval
+> threshold; and £264.00 per head is over £98.16 per head — the handbook's
+> £75.00 per head restated in today's money (prices are up 30.9% since 2019-03).
+
+### Dashboard half — done
+
+`pages/2_Review_Queue.py` now shows the summary under each receipt (it previously
+showed only the bare verdict string), sorts high-risk above flagged so Amara's own
+queue is on top, takes an optional note that is recorded in the audit trail, and
+says so explicitly when a verdict has no stored reasoning rather than rendering a
+blank card.
+
+### Slack half — still on AA
+
+1. Confirm **"High-Risk Expense Slack Routing"**, **"Request Employee Explanation"** and **"Low Risk Compliance Feedback"** still reference `$json.final_audit_result.contextual_summary`. Untouched by anything here, so they should still work.
+2. If the workflow is ever pointed at `/api/audit`, use the response's `slack_message` field directly instead of re-formatting in the node — that is what keeps the two surfaces identical.
+3. Submit a real test receipt through Slack; confirm the reply's merchant, amount and reason match the Verdicts row.
+
+### Done when
+
+A high-risk test receipt produces a Slack message *and* a Verdicts row, the
+Review Queue shows that same text, and `/api/expenses` can pull the receipt back
+out. Steps 1-2 of the C3 punch list have to land first.

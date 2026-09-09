@@ -8,3 +8,4 @@ gspread
 google-auth
 openai
 requests
+python-dotenv
