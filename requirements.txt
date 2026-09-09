@@ -2,8 +2,9 @@ pylint
 pytest
 flask
 altair
-psycopg2
 pandas
 streamlit
 gspread
 google-auth
+openai
+requests

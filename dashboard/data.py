@@ -20,8 +20,8 @@ DEFAULT_SPREADSHEET_ID = "1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.file"]
 
 RECEIPT_HEADERS = ["receipt_id", "receipt_date", "merchant", "line_items", "total_amount", "tax",
-                    "payment_method", "category", "currency", "submitter", "raw_file_reference",
-                    "source_channel", "status", "created_at", "updated_at"]
+                    "category", "currency", "submitter", "raw_file_reference",
+                    "status", "created_at", "updated_at"]
 VERDICT_HEADERS = ["verdict_id", "receipt_id", "verdict", "reason", "created_at"]
 DECISION_HEADERS = ["decision_id", "receipt_id", "decision", "decided_by", "decided_at", "notes"]
 
@@ -70,7 +70,13 @@ def decisions_ws():
 
 def _next_id(ws, id_col: str) -> int:
     records = ws.get_all_records()
-    return max((int(r[id_col]) for r in records if str(r[id_col]).strip()), default=0) + 1
+    ids = []
+    for r in records:
+        try:
+            ids.append(int(r[id_col]))
+        except (ValueError, TypeError):
+            continue  # tolerate malformed IDs from other writers (e.g. n8n's "=ROW()-1")
+    return max(ids, default=0) + 1
 
 
 def load_receipts() -> pd.DataFrame:

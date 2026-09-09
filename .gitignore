@@ -4,4 +4,4 @@ __pycache__/
 *.pyc
 service_account.json
 .streamlit/secrets.toml
-.expense-intelligence-*
+expense-intelligence-*.json

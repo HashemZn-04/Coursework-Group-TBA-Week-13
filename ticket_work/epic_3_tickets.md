@@ -10,7 +10,7 @@
 1. **C1 is done** — schema now lives as the 3 sheet tabs below instead of 3 Postgres tables. Same fields, same intent.
 2. **C3's real blocker (A3 Governance Prompt) doesn't exist as a finished artifact yet.** AA already built a working draft directly inside the n8n workflow — a generic "contextual reasonableness" system prompt plus two hardcoded rules (£2,000 CFO threshold, £250 line-manager threshold, 1-month cutoff). Real, usable v1 — just not the full handbook ruleset. Build on it rather than wait.
 3. **C2 (CPI pull) hasn't been built at all** — no cron node, no CPI/FRED/BLS reference anywhere in n8n. Technically blocks C4; workaround below unblocks you today.
-4. **AA's n8n workflow calls OpenAI directly** from the "AI Contextual Audit" node — not a DA-owned API. An orphaned "Store Expense Record" node pair is wired to nothing, so nothing persists anywhere right now. Closing C3/C4/C5 for real means building the API below and getting AA to repoint that one node at it.
+4. **AA's n8n workflow calls OpenAI directly** from the "AI Contextual Audit" node — not a DA-owned API. An orphaned "Store Expense Record" node pair is wired to nothing, so nothing persists anywhere right now. Revised plan (see C3, 2026-09-09): rather than repoint that node, DA supplies the real governance-prompt content for it and n8n forwards its finished result to a new Flask persistence endpoint — closes the same gap without needing DA to hold an OpenAI key.
 
 Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 is AA's, C7 is Mason's.)
 
@@ -51,8 +51,8 @@ Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 
     SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive.file"]
 
     RECEIPT_HEADERS = ["receipt_id", "receipt_date", "merchant", "line_items", "total_amount", "tax",
-                        "payment_method", "category", "currency", "submitter", "raw_file_reference",
-                        "source_channel", "status", "created_at", "updated_at"]
+                        "category", "currency", "submitter", "raw_file_reference",
+                        "status", "created_at", "updated_at"]  # payment_method/source_channel dropped from the sheet
     VERDICT_HEADERS = ["verdict_id", "receipt_id", "verdict", "reason", "created_at"]
     DECISION_HEADERS = ["decision_id", "receipt_id", "decision", "decided_by", "decided_at", "notes"]
 
@@ -118,6 +118,8 @@ Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 
 
 ## C6 — Expose approved-expense query API (MCP-34)
 
+> **Note on hosting:** this Flask endpoint has the same "only reachable from localhost" limitation as the original C3 plan — it's genuinely useful for local testing and as a demonstrable artifact, but isn't something that needs to be live for the actual dashboard to work: `dashboard/data.py` already reads the Google Sheet directly (no HTTP hop), which is how the dashboard stays fully functional on Streamlit Community Cloud without this API running anywhere. Treat `/api/expenses` as a satisfied-in-spirit deliverable (filterable, paginated query logic exists and is tested) rather than infrastructure the live system depends on.
+
 **Dependencies:** C1 only (done). **Can start now: yes.**
 **Software:** Flask app above, `gspread`, browser/curl.
 
@@ -167,111 +169,86 @@ Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 
 
 ## C3 — Policy Match against Governance Prompt (MCP-25)
 
-**Dependencies:** A3 content (workaround: reuse/extend AA's existing n8n system prompt — see finding #2 above). **Can start now: yes.**
-**Software:** Flask app, OpenAI SDK, `gspread`.
+> **2026-09-09 revision (2nd) — AA already added a Sheets append node, but it doesn't close C3 yet.** AA replaced the workflow export with a new file, `discovery_docs/Expense - High Risk Google Sheets Append.json` (the old `Expense Intelligence - Receipt Intake.json` is gone). It's a bigger change than "add one node": AA added a whole new **manual-entry submission path** (a Slack slash-command → modal form → re-runs OCR/audit under new "2"-suffixed nodes) alongside the original file-upload path, and wired a Google Sheets "Append" node into that new path's high-risk branch only. Checked it node-by-node before writing anything further here — don't treat it as done, it has real gaps:
+>
+> - **The original Slack file-upload path — the one B1/B4/B6 actually describe, and presumably the main demo path — still has zero persistence.** Its own "High Risk?" node goes straight to a Slack message, same dead end as before. The new Sheets node only fires from the *new* modal-entry path.
+> - **Only HIGH-risk modal submissions get saved.** Medium/low-risk ones aren't persisted at all — which breaks C6/E2/E5 (they need *every* receipt, not just the flagged ones).
+> - **No verdict is ever written anywhere.** The Sheets node only appends to **Receipts** (13 columns match our schema exactly, good) — there's no matching write to **Verdicts**. So even the one case that does get saved won't show up in Review Queue, since that page filters on `verdict.isin(['flagged','high_risk'])` and no verdict row will exist for it.
+> - **`receipt_id` is set to the literal string `'=ROW()-1'`** in the upstream "Prepare High-Risk Sheet Row" code node — not a real generated ID. Sheets will very likely store this as inert text, not evaluate it as a formula, meaning every row from this path gets the *same* non-numeric `receipt_id`. (I've made `_next_id()` in both `dashboard/data.py` and `api/sheets.py` tolerant of this — it now skips unparseable IDs instead of crashing — but the underlying value is still wrong/non-unique.)
+> - **Column swap:** that same code node puts the expense's real original ID into `raw_file_reference` instead of `receipt_id`, and hardcodes `status` to `'pending'` (our schema/dashboard use `'pending_review'`).
+>
+> None of this is something I can fix from the Python/docs side — it needs a decision and a fix in the n8n workflow itself. What follows is the governance-prompt content (still correct and usable as-is) plus a concrete punch list to hand to AA. I have not assumed this is fixed in the steps below — I've marked exactly what still blocks C3 being genuinely done.
 
-1. Create `api/governance_prompt.py` with `SYSTEM_PROMPT = """..."""` — start from AA's existing n8n prompt (found in the "AI Contextual Audit" node) and extend it with the concrete rules Amara actually confirmed:
-   - CFO approval threshold is **$2,000** (Amara's verbal correction — printed handbook's £1,000 is stale).
-   - Line-manager approval: £250–£2,000.
-   - Receipts older than 1 month: **auto-reject, no exceptions**.
-   - Reasonableness test = "would this help you do your job."
-   - Non-listed software needs manager + IT sign-off regardless of cost.
-   - Foreign-currency receipts: weigh purchasing power, not just FX rate.
-   - Flag (don't auto-reject) split-receipting patterns.
-   Sync with PM before calling this final — this content is technically A3.
-2. Create `api/audit.py`:
-   ```python
-   import os, json
-   from openai import OpenAI
-   from api.governance_prompt import SYSTEM_PROMPT
+**Dependencies:** A3 content (workaround: reuse/extend AA's existing n8n system prompt — done, see step 1). AA fixing the persistence gaps above, or DA/AA agreeing on who does. **Can start now:** the prompt content and Python side, yes. **The actual "every receipt gets a stored verdict" acceptance criterion: no, blocked on the n8n fixes below.**
+**Software:** `gspread`, n8n web UI (no OpenAI SDK/key needed in Python — see the earlier revision above for why).
 
-   client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+1. `api/governance_prompt.py` — done. `SYSTEM_PROMPT` starts from AA's existing "AI Contextual Audit" node prompt and extends it with the concrete rules Amara actually confirmed (CFO threshold $2,000, line-manager band $250–$2,000,
+1-month cutoff no exceptions, the reasonableness test, non-listed-software sign-off, foreign-currency purchasing power, split-receipting). Sync with PM before calling this final — it's technically A3 content. Paste it into the "AI Contextual Audit" node's `jsonBody` → `input[0].content[0].text` (plain text inside the existing backtick template literal — the prompt has no backticks or `${...}` in it, so it's safe to paste with real line breaks).
+2. Send AA this punch list:
+   - **Run on both branches, all risk tiers.** Move the Sheets append upstream of the High/Medium/Low check (or replicate it on the original file-upload branch too) — right now only high-risk modal submissions get saved.
+   - **Fix `receipt_id`:** before "Prepare High-Risk Sheet Row", add a Google Sheets **Get Row(s)** node reading the Receipts tab. In "Prepare High-Risk Sheet Row", replace `'=ROW()-1'` with the highest existing `receipt_id` from that Get Row(s) output plus one (falling back to 1 if the sheet's empty), instead of a hardcoded formula string.
+   - **Fix the swap:** `raw_file_reference` = the actual file reference; `receipt_id` = the computed value above (not the reverse).
+   - **Fix status:** `'pending'` → `'pending_review'`.
+   - **Add a Verdicts append** (Google Sheets, Append, sheet = Verdicts) right after the Receipts append: `verdict_id` = any unique value, `receipt_id` = the same id just written, `verdict` = `{{ {HIGH:'high_risk', MEDIUM:'flagged', LOW:'compliant'}[$json.final_audit_result.risk_level] }}`, `reason` = `{{ $json.final_audit_result.contextual_summary }}`, `created_at` = `{{ $now.toISO() }}`.
+3. Once AA applies those fixes (or you do, if you have edit access — same instructions apply either way), test with a real Slack upload of a receipt image (the original path, not the slash-command/modal one) and confirm a row lands in **both** Receipts and Verdicts, with a real numeric `receipt_id` shared between them, `status = pending_review`, and `raw_file_reference` pointing at the actual file.
+4. Done once that's true for all three risk tiers, not just high-risk — that's what actually satisfies "every ingested receipt receives a stored policy verdict."
 
-   SCHEMA = {  # copy verbatim from the n8n "AI Contextual Audit" node
-       "type": "object", "additionalProperties": False,
-       "properties": {
-           "business_purpose_clear": {"type": "boolean"},
-           "business_relevance": {"type": "string", "enum": ["CLEAR","PLAUSIBLE","UNCLEAR","LIKELY_PERSONAL"]},
-           "reasonableness": {"type": "string", "enum": ["REASONABLE","QUESTIONABLE","UNREASONABLE","INSUFFICIENT_INFORMATION"]},
-           "category": {"type": "string", "enum": ["TRAVEL","ACCOMMODATION","SUBSISTENCE","CLIENT_ENTERTAINMENT",
-               "STAFF_ENTERTAINMENT","SOFTWARE_TECHNOLOGY","TRAINING","OFFICE_SUPPLIES","POSTAGE_COURIER",
-               "PROFESSIONAL_SUBSCRIPTION","MISCELLANEOUS","OTHER"]},
-           "risk_factors": {"type": "array", "items": {"type": "string"}},
-           "positive_factors": {"type": "array", "items": {"type": "string"}},
-           "recommended_action": {"type": "string", "enum": ["PASS","NEEDS_EMPLOYEE_EXPLANATION","NEEDS_HUMAN_REVIEW"]},
-           "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-           "summary": {"type": "string"},
-       },
-       "required": ["business_purpose_clear","business_relevance","reasonableness","category",
-                    "risk_factors","positive_factors","recommended_action","confidence","summary"],
-   }
+`api/app.py`'s `/api/audit`, `/api/audit`-adjacent `insert_receipt`/`insert_verdict` in `api/sheets.py`, and `map_verdict()` in `api/audit.py` still work standalone (tested with mocked payloads earlier) and remain a useful local reference for exactly what fields/shape the sheet needs — they're just not wired into the live n8n pipeline, by choice, per the earlier hosting discussion.
 
-   def run_contextual_audit(audit_reasoning_input: dict) -> dict:
-       resp = client.responses.create(
-           model="gpt-5",
-           input=[
-               {"role": "system", "content": SYSTEM_PROMPT},
-               {"role": "user", "content": f"Assess this expense:\n\n{json.dumps(audit_reasoning_input, indent=2)}"},
-           ],
-           text={"format": {"type": "json_schema", "name": "expense_contextual_audit", "strict": True, "schema": SCHEMA}},
-       )
-       return json.loads(resp.output_text)
+<details>
+<summary>Alternative: Python-side LLM call (needs an OpenAI/Anthropic key) — kept for reference, not the current path</summary>
 
-   def final_verdict(policy_checks: dict, audit: dict) -> tuple[str, str]:
-       """Mirrors n8n's 'Final Risk Assessment' node — keep in sync if that logic changes."""
-       high = (policy_checks.get("human_review_required")
-               or "CFO_APPROVAL" in policy_checks.get("approvals_required", [])
-               or audit["recommended_action"] == "NEEDS_HUMAN_REVIEW"
-               or audit["business_relevance"] == "LIKELY_PERSONAL"
-               or audit["reasonableness"] == "UNREASONABLE")
-       if high:
-           return "high_risk", "HIGH"
-       medium = (audit["recommended_action"] == "NEEDS_EMPLOYEE_EXPLANATION"
-                 or audit["business_relevance"] == "UNCLEAR"
-                 or audit["reasonableness"] in ("QUESTIONABLE", "INSUFFICIENT_INFORMATION")
-                 or audit["confidence"] < 0.75)
-       return ("flagged", "MEDIUM") if medium else ("compliant", "LOW")
-   ```
-3. Add the route to `api/app.py`:
-   ```python
-   from api.audit import run_contextual_audit, final_verdict
-   from api.sheets import insert_receipt, insert_verdict
+If a key becomes available later and the team prefers DA's API to make the LLM call directly instead of n8n:
 
-   @app.post("/api/audit")
-   def audit_receipt():
-       payload = request.get_json()
-       policy_checks = {"human_review_required": payload.get("human_review_required", False),
-                         "approvals_required": payload.get("approvals_required", [])}
-       audit = run_contextual_audit(payload)
-       verdict, risk_level = final_verdict(policy_checks, audit)
+```python
+# api/audit.py
+import os, json
+from openai import OpenAI
+from governance_prompt import SYSTEM_PROMPT
 
-       receipt_id = insert_receipt({
-           "receipt_date": payload.get("transaction_date"), "merchant": payload.get("merchant"),
-           "line_items": payload.get("line_items", []), "total_amount": payload.get("total"),
-           "tax": payload.get("tax"), "category": audit["category"].lower(),
-           "currency": payload.get("currency"), "submitter": payload.get("submitted_by"),
-           "source_channel": "slack", "status": "pending_review",
-       })
-       insert_verdict(receipt_id, verdict, audit["summary"])
+_client = None
+def _get_client():
+    global _client
+    if _client is None:
+        _client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    return _client
 
-       return {**audit, "risk_level": risk_level, "verdict": verdict, "receipt_id": receipt_id}
-   ```
-4. Restart Flask, test with curl:
-   ```
-   curl -X POST http://localhost:5000/api/audit -H "Content-Type: application/json" -d '{
-     "expense_id":"test-1","submitted_by":"j.chen","merchant":"Delta Airlines","transaction_date":"2026-08-01",
-     "currency":"USD","total":450,"line_items":[{"description":"flight","amount":450,"quantity":1}],
-     "deterministic_flags":[],"approvals_required":[],"human_review_required":false}'
-   ```
-   Confirm a JSON verdict comes back, and open the Google Sheet in your browser — a new row should appear in **Receipts** and one in **Verdicts** within a second or two (Sheets updates live).
-5. Coordinate the n8n rewire with AA (same as before): open n8n → **"AI Contextual Audit"** node → change URL from `https://api.openai.com/v1/responses` to your Flask endpoint (use `ngrok http 5000` if AA's n8n can't reach your machine directly) → simplify the request body to just `{{ $json.audit_reasoning_input }}` → remove the OpenAI credential → then open **"Parse Audit Result"** and simplify it to read `$json.body` directly instead of walking OpenAI's response envelope.
-6. Done once a live-submitted receipt produces a stored verdict + reasoning in the sheet within a few seconds.
+SCHEMA = { ... }  # same 9-field schema as the n8n node — see governance_prompt.py's docstring
+
+def run_contextual_audit(audit_reasoning_input: dict) -> dict:
+    resp = _get_client().responses.create(
+        model="gpt-5",
+        input=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"Assess this expense:\n\n{json.dumps(audit_reasoning_input, indent=2)}"},
+        ],
+        text={"format": {"type": "json_schema", "name": "expense_contextual_audit", "strict": True, "schema": SCHEMA}},
+    )
+    return json.loads(resp.output_text)
+
+def final_verdict(policy_checks: dict, audit: dict) -> tuple[str, str]:
+    high = (policy_checks.get("human_review_required")
+            or "CFO_APPROVAL" in policy_checks.get("approvals_required", [])
+            or audit["recommended_action"] == "NEEDS_HUMAN_REVIEW"
+            or audit["business_relevance"] == "LIKELY_PERSONAL"
+            or audit["reasonableness"] == "UNREASONABLE")
+    if high:
+        return "high_risk", "HIGH"
+    medium = (audit["recommended_action"] == "NEEDS_EMPLOYEE_EXPLANATION"
+              or audit["business_relevance"] == "UNCLEAR"
+              or audit["reasonableness"] in ("QUESTIONABLE", "INSUFFICIENT_INFORMATION")
+              or audit["confidence"] < 0.75)
+    return ("flagged", "MEDIUM") if medium else ("compliant", "LOW")
+```
+
+Then `/api/audit` would call `run_contextual_audit(payload)` itself instead of trusting a pre-computed `risk_level`, and n8n's "AI Contextual Audit" node would be repointed at this Flask endpoint instead of OpenAI directly (URL swap + simplified body, and simplify "Parse Audit Result" to read the flat response instead of walking OpenAI's envelope).
+</details>
 
 ---
 
 ## C4 — Contextual Validation, inflation-aware (MCP-27)
 
-**Dependencies:** C2's benchmark data (not built) — workaround below unblocks you today. Attaches to C3's endpoint.
+**Dependencies:** C2's benchmark data (not built) — workaround below unblocks you today. The category-limit/inflation logic itself has no blocker; where it ultimately runs (n8n vs. a future API) depends on how C3's persistence gap gets resolved.
 **Software:** Same Flask app, free FRED API key, `requests`.
 
 1. Get a FRED key: `fred.stlouisfed.org` → **My Account** → **Register**/sign in → **My Account → API Keys** → **Request API Key** → copy it.
@@ -308,10 +285,10 @@ Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 
 
 ## C5 — High-Risk routing & natural-language summary (MCP-31)
 
-**Dependencies:** C3 + C4 (done above). **Software:** Same Flask app, n8n web UI, Slack.
+**Dependencies:** C3's verdict-persistence gap (see the punch list above) must close first — right now no verdict is ever saved, so there's nothing for Review Queue to show even for a high-risk receipt. **Software:** n8n web UI, Slack.
 
-1. Confirm `/api/audit`'s response already includes `summary` — nothing new to add, C3 covers this.
-2. In n8n, check **"High-Risk Expense Slack Routing"**, **"Request Employee Explanation"**, **"Low Risk Compliance Feedback"** nodes reference wherever your summary field now lives (update the expression if you simplified "Parse Audit Result" in C3 step 5).
+1. Confirm the summary reaches both surfaces: n8n's "Final Risk Assessment" already produces `contextual_summary` (from the governance-prompt LLM call) — the new "Persist to Audit API" node (C3 step 5) forwards it into `verdicts.reason`, so it's now stored and queryable via C6 too. Nothing new to add here.
+2. In n8n, confirm **"High-Risk Expense Slack Routing"**, **"Request Employee Explanation"**, **"Low Risk Compliance Feedback"** still reference `$json.final_audit_result.contextual_summary` — untouched by the C3 rewire, so this should already work.
 3. Submit a real test receipt through Slack, confirm the reply includes merchant/amount/reason matching what's now in the **Verdicts** tab.
-4. Confirm the dashboard side: your C6 endpoint is the "available via API" half of this ticket — no new dashboard code required for C5 itself.
+4. Confirm the dashboard side: the summary is now in `verdicts.reason` in the sheet, and `dashboard/data.py`'s `load_expenses()` already surfaces it to Review Queue — that's the "available to the dashboard" half of this ticket. No new dashboard code required for C5 itself.
 5. Done once a high-risk test receipt produces a Slack message *and* a row in **Verdicts** you can pull back out via `/api/expenses`.

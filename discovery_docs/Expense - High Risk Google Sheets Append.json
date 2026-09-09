@@ -1,5 +1,5 @@
 {
-  "name": "Expense Intelligence - Receipt Intake",
+  "name": "Expense - High Risk Google Sheets Append",
   "nodes": [
     {
       "parameters": {
@@ -711,220 +711,130 @@
     },
     {
       "parameters": {
-        "trigger": [
-          "message"
-        ],
-        "channelId": {
-          "__rl": true,
-          "value": "C0BS4PR9C23",
-          "mode": "list",
-          "cachedResultName": "n8n-automation"
-        },
+        "httpMethod": "POST",
+        "path": "expense-submit",
+        "responseMode": "responseNode",
         "options": {}
       },
-      "type": "n8n-nodes-base.slackTrigger",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
       "position": [
-        -1664,
-        3376
+        -1520,
+        2336
       ],
-      "id": "e3426465-45c3-4925-bd52-221a8cdecf2d",
-      "name": "Slack Trigger1",
-      "webhookId": "c480e12c-4fe5-4c84-a4f0-66340fbaa967",
-      "credentials": {
-        "slackApi": {
-          "id": "djVYSfjjkVbmFcP4",
-          "name": "c25-farah-slack"
-        }
-      }
+      "id": "53c6747a-e367-4b20-a674-637e0983e198",
+      "name": "Expense Slash Command",
+      "webhookId": "expense-slash-command-webhook"
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 3
-          },
-          "conditions": [
-            {
-              "id": "receipt-file-check",
-              "leftValue": "={{ $json.files ? $json.files.length : 0 }}",
-              "rightValue": 0,
-              "operator": {
-                "type": "number",
-                "operation": "gt"
-              }
-            }
-          ],
-          "combinator": "and"
-        },
+        "respondWith": "noData",
         "options": {}
       },
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.3,
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
       "position": [
-        -1376,
-        3376
+        -800,
+        2336
       ],
-      "id": "f2dc8c38-6afe-49e6-9718-980059e9ebd7",
-      "name": "Receipt File?1"
+      "id": "ab2976ba-ad15-4d9f-a0d4-fd360a041840",
+      "name": "Respond to Slash Command"
     },
     {
       "parameters": {
-        "select": "channel",
-        "channelId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $('Slack Trigger1').item.json.channel }}"
-        },
-        "text": "Thanks — your receipt has been received and is now being processed.",
-        "otherOptions": {
-          "thread_ts": {
-            "replyValues": {
-              "thread_ts": "={{ $('Slack Trigger1').item.json.ts }}"
-            }
-          }
-        }
+        "httpMethod": "POST",
+        "path": "expense-modal-submit",
+        "responseMode": "responseNode",
+        "options": {}
       },
-      "type": "n8n-nodes-base.slack",
-      "typeVersion": 2.4,
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
       "position": [
-        -1136,
-        3360
+        -1456,
+        2736
       ],
-      "id": "92e81f86-1740-461e-9d6a-074fdbce2a5d",
-      "name": "Receipt Acknowledgement1",
-      "webhookId": "f241cc90-dc6c-4d02-b0c4-257bc2edb61a",
-      "credentials": {
-        "slackApi": {
-          "id": "djVYSfjjkVbmFcP4",
-          "name": "c25-farah-slack"
-        }
-      }
+      "id": "c635049c-8da9-47d4-a9fd-acf240558c49",
+      "name": "Expense Modal Submission",
+      "webhookId": "expense-modal-submission-webhook"
     },
     {
       "parameters": {
-        "jsCode": "const slack = $('Slack Trigger1').first().json;\n\nconst files = Array.isArray(slack.files) ? slack.files : [];\nconst file = files.length > 0 ? files[0] : null;\n\nreturn [\n  {\n    json: {\n      source: 'slack',\n\n      // Submission information\n      submitter_id: slack.user ?? null,\n      channel_id: slack.channel ?? null,\n      message_ts: slack.ts ?? null,\n      message_text: slack.text ?? '',\n      submitted_at: slack.event_ts ?? null,\n\n      // Receipt information\n      receipt_file_present: !!file,\n      receipt_file_count: files.length,\n\n      receipt_id: file?.id ?? null,\n      file_name: file?.name ?? null,\n      file_title: file?.title ?? null,\n      mime_type: file?.mimetype ?? null,\n      file_type: file?.filetype ?? null,\n      file_size: file?.size ?? null,\n\n      // Slack's event payload contains url_private in your test.\n      file_url: file?.url_private ?? null\n    }\n  }\n];"
+        "jsCode": "const body = $json.body || $json;\n\nlet payload = body.payload || body;\n\nif (typeof payload === 'string') {\n  try {\n    payload = JSON.parse(payload);\n  } catch (error) {\n    throw new Error(`Could not parse Slack payload: ${error.message}`);\n  }\n}\n\nif (payload.type !== 'view_submission') {\n  throw new Error(`Unexpected Slack interaction type: ${payload.type || 'unknown'}`);\n}\n\nif (payload.view?.callback_id !== 'expense_submission') {\n  throw new Error('Unexpected modal callback_id.');\n}\n\nconst values = payload.view?.state?.values || {};\n\nconst category =\n  values.expense_category_block?.expense_category?.selected_option?.value || '';\n\nconst categoryLabel =\n  values.expense_category_block?.expense_category?.selected_option?.text?.text || '';\n\nconst otherCategory =\n  values.other_category_block?.other_category?.value || '';\n\nconst businessPurpose =\n  values.business_purpose_block?.business_purpose?.value || '';\n\nconst currency =\n  values.currency_block?.currency?.selected_option?.value || 'AUTO';\n\nconst currencyLabel =\n  values.currency_block?.currency?.selected_option?.text?.text || 'Let the system determine';\n\nconst receiptInput =\n  values.receipt_block?.receipt_file || {};\n\nlet receiptFiles = [];\n\nif (Array.isArray(receiptInput.files)) {\n  receiptFiles = receiptInput.files;\n} else if (Array.isArray(receiptInput.selected_files)) {\n  receiptFiles = receiptInput.selected_files;\n} else if (Array.isArray(receiptInput.selectedFiles)) {\n  receiptFiles = receiptInput.selectedFiles;\n}\n\nconst firstReceipt = receiptFiles[0] || null;\n\nlet privateMetadata = {};\n\nif (payload.view?.private_metadata) {\n  try {\n    privateMetadata = JSON.parse(payload.view.private_metadata);\n  } catch (_) {\n    privateMetadata = {};\n  }\n}\n\nconst effectiveCategory =\n  category === 'OTHER' && otherCategory.trim()\n    ? otherCategory.trim()\n    : category;\n\nreturn [\n  {\n    json: {\n      submission_type: payload.type,\n      callback_id: payload.view.callback_id,\n      view_id: payload.view.id || '',\n      submitted_at: new Date().toISOString(),\n\n      submitter_id: payload.user?.id || privateMetadata.user_id || '',\n      team_id: payload.team?.id || privateMetadata.team_id || '',\n      channel_id: privateMetadata.channel_id || '',\n\n      category,\n      category_label: categoryLabel,\n      other_category: otherCategory,\n      effective_category: effectiveCategory,\n\n      business_purpose: businessPurpose,\n\n      currency,\n      currency_label: currencyLabel,\n      currency_needs_determination: currency === 'AUTO',\n\n      receipt_file_id:\n        firstReceipt?.id || firstReceipt?.file_id || '',\n      receipt_file_name:\n        firstReceipt?.name || firstReceipt?.title || '',\n      receipt_mime_type:\n        firstReceipt?.mimetype || firstReceipt?.mime_type || '',\n      receipt_file_url:\n        firstReceipt?.url_private_download ||\n        firstReceipt?.url_private ||\n        '',\n      receipt_file: firstReceipt,\n\n      raw_slack_payload: payload\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -928,
-        3360
+        -1216,
+        2736
       ],
-      "id": "612d65d6-423f-4f1f-8d01-76e0fcee4b0d",
-      "name": "Extract Receipt Metadata1"
+      "id": "31d77f76-67a4-453f-8d21-460501f96595",
+      "name": "Parse Expense Submission"
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 3
-          },
-          "conditions": [
-            {
-              "id": "receipt-file-present",
-              "leftValue": "={{ $json.receipt_file_present }}",
-              "rightValue": true,
-              "operator": {
-                "type": "boolean",
-                "operation": "true",
-                "singleValue": true
-              }
-            }
-          ],
-          "combinator": "and"
-        },
+        "respondWith": "noData",
         "options": {}
       },
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.3,
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
       "position": [
-        -688,
-        3360
+        -976,
+        2592
       ],
-      "id": "b3928da9-8c43-4f4c-9190-dde7febd061d",
-      "name": "Receipt File Present?1"
+      "id": "6e5ca388-6028-4f70-8aa4-8a26b56efe95",
+      "name": "Respond to Modal Submission"
     },
     {
       "parameters": {
-        "conditions": {
-          "options": {
-            "caseSensitive": true,
-            "leftValue": "",
-            "typeValidation": "strict",
-            "version": 3
-          },
-          "conditions": [
-            {
-              "id": "supported-jpeg",
-              "leftValue": "={{ $json.mime_type }}",
-              "rightValue": "image/jpeg",
-              "operator": {
-                "type": "string",
-                "operation": "equals"
-              }
-            },
-            {
-              "id": "supported-png",
-              "leftValue": "={{ $json.mime_type }}",
-              "rightValue": "image/png",
-              "operator": {
-                "type": "string",
-                "operation": "equals"
-              }
-            },
-            {
-              "id": "supported-pdf",
-              "leftValue": "={{ $json.mime_type }}",
-              "rightValue": "application/pdf",
-              "operator": {
-                "type": "string",
-                "operation": "equals"
-              }
-            },
-            {
-              "id": "42758ebd-ef5f-491a-bd27-4c2e216f440a",
-              "leftValue": "={{ $json.mime_type }}",
-              "rightValue": "image/jpg",
-              "operator": {
-                "type": "string",
-                "operation": "equals",
-                "name": "filter.operator.equals"
-              }
-            },
-            {
-              "id": "2d38e58e-6fd7-467e-b07e-7bedb89a90a9",
-              "leftValue": "={{ $json.mime_type }}",
-              "rightValue": "image/webp",
-              "operator": {
-                "type": "string",
-                "operation": "equals",
-                "name": "filter.operator.equals"
-              }
-            }
-          ],
-          "combinator": "or"
-        },
+        "jsCode": "const item = $json;\n\n// The category is mandatory because the handbook requires\n// every expense to be coded at the point of submission.\nif (!item.category) {\n  throw new Error('No expense category was submitted.');\n}\n\n// A receipt is mandatory for this workflow.\nif (!item.receipt_file_id && !item.receipt_file_url) {\n  throw new Error('No receipt file was submitted.');\n}\n\nreturn [\n  {\n    json: {\n      ...item,\n\n      expense_submission: {\n        expense_id:\n          item.receipt_file_id ||\n          `expense-${Date.now()}`,\n\n        submitter_id:\n          item.submitter_id || '',\n\n        team_id:\n          item.team_id || '',\n\n        channel_id:\n          item.channel_id || '',\n\n        category:\n          item.category,\n\n        category_label:\n          item.category_label || '',\n\n        currency:\n          item.currency || 'AUTO',\n\n        currency_label:\n          item.currency_label ||\n          'Let the system determine',\n\n        currency_needs_determination:\n          item.currency === 'AUTO',\n\n        receipt: {\n          file_id:\n            item.receipt_file_id || '',\n\n          file_name:\n            item.receipt_file_name || '',\n\n          mime_type:\n            item.receipt_mime_type || '',\n\n          file_url:\n            item.receipt_file_url || ''\n        }\n      }\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -736,
+        2736
+      ],
+      "id": "7d580662-4475-4d16-b7c3-ee97f468ace3",
+      "name": "Normalise Expense Submission"
+    },
+    {
+      "parameters": {
+        "url": "=https://slack.com/api/files.info?file={{ $json.receipt_file_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
         "options": {}
       },
-      "type": "n8n-nodes-base.if",
-      "typeVersion": 2.3,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
       "position": [
-        -448,
-        3280
+        -496,
+        2736
       ],
-      "id": "f6faad4b-2d1a-44e1-b81b-5c6d89a75633",
-      "name": "Supported Receipt Type?1"
+      "id": "0b4bacf0-8558-49a9-9b23-0860cde721c7",
+      "name": "Get Receipt File Info",
+      "credentials": {
+        "slackApi": {
+          "id": "djVYSfjjkVbmFcP4",
+          "name": "c25-farah-slack"
+        }
+      }
     },
     {
       "parameters": {
-        "url": "={{ $json.file_url }}",
+        "jsCode": "const response = $json;\nconst submission = $('Normalise Expense Submission').first().json;\n\nif (response.ok === false) {\n  throw new Error(`Slack files.info failed: ${response.error || 'unknown error'}`);\n}\n\nconst file = response.file || {};\n\nconst fileUrl =\n  file.url_private_download ||\n  file.url_private ||\n  submission.receipt_file_url ||\n  '';\n\nif (!fileUrl) {\n  throw new Error('Slack did not return a private file URL.');\n}\n\nreturn [\n  {\n    json: {\n      ...submission,\n      receipt_url_private_download: fileUrl,\n      receipt_file_name: file.name || submission.receipt_file_name || 'receipt',\n      receipt_mime_type: file.mimetype || submission.receipt_mime_type || '',\n      receipt_file_size: file.size || null,\n      receipt_file_type: file.filetype || ''\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -256,
+        2736
+      ],
+      "id": "564bf624-87c3-43a2-b4b9-1fbaa98ecab4",
+      "name": "Prepare Receipt Download"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.receipt_url_private_download }}",
         "authentication": "predefinedCredentialType",
         "nodeCredentialType": "slackApi",
         "options": {
@@ -936,13 +846,13 @@
         }
       },
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.3,
+      "typeVersion": 4.5,
       "position": [
-        -208,
-        3280
+        -16,
+        2736
       ],
-      "id": "1b89f381-0b2f-41dd-bf7e-99b848a9024b",
-      "name": "Download Receipt1",
+      "id": "e33b30a0-e6d4-4e17-bb89-a94e94c29dad",
+      "name": "Download Modal Receipt",
       "credentials": {
         "slackApi": {
           "id": "djVYSfjjkVbmFcP4",
@@ -952,30 +862,36 @@
     },
     {
       "parameters": {
-        "select": "channel",
-        "channelId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $('Slack Trigger1').item.json.channel }}"
-        },
-        "text": "I couldn't find a receipt file attached to your message. Please send your receipt as a JPG, PNG, or PDF.",
-        "otherOptions": {
-          "thread_ts": {
-            "replyValues": {
-              "thread_ts": "={{ $('Slack Trigger1').item.json.ts }}"
-            }
-          }
-        }
+        "jsCode": "const body = $json.body || $json;\n\nif (!body.trigger_id) {\n  throw new Error('Slack slash command did not provide trigger_id.');\n}\n\nconst modal = {\n  type: 'modal',\n  callback_id: 'expense_submission',\n  external_id: `expense-${body.trigger_id}`,\n\n  title: {\n    type: 'plain_text',\n    text: 'Submit Expense',\n    emoji: true\n  },\n\n  submit: {\n    type: 'plain_text',\n    text: 'Submit',\n    emoji: true\n  },\n\n  close: {\n    type: 'plain_text',\n    text: 'Cancel',\n    emoji: true\n  },\n\n  private_metadata: JSON.stringify({\n    user_id: body.user_id || '',\n    channel_id: body.channel_id || '',\n    team_id: body.team_id || ''\n  }),\n\n  blocks: [\n    {\n      type: 'input',\n      block_id: 'expense_category_block',\n      label: {\n        type: 'plain_text',\n        text: 'Expense category',\n        emoji: true\n      },\n      element: {\n        type: 'static_select',\n        action_id: 'expense_category',\n        placeholder: {\n          type: 'plain_text',\n          text: 'Select an expense category'\n        },\n        options: [\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Travel (Rail)'\n            },\n            value: 'TRAVEL_RAIL'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Travel (Air)'\n            },\n            value: 'TRAVEL_AIR'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Travel (Road/Mileage)'\n            },\n            value: 'TRAVEL_ROAD_MILEAGE'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Accommodation'\n            },\n            value: 'ACCOMMODATION'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Subsistence'\n            },\n            value: 'SUBSISTENCE'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Client Entertainment'\n            },\n            value: 'CLIENT_ENTERTAINMENT'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Staff Entertainment'\n            },\n            value: 'STAFF_ENTERTAINMENT'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Professional Subscriptions'\n            },\n            value: 'PROFESSIONAL_SUBSCRIPTIONS'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Software and Technology'\n            },\n            value: 'SOFTWARE_AND_TECHNOLOGY'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Training and Development'\n            },\n            value: 'TRAINING_AND_DEVELOPMENT'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Office Supplies'\n            },\n            value: 'OFFICE_SUPPLIES'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Postage and Courier'\n            },\n            value: 'POSTAGE_AND_COURIER'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Miscellaneous'\n            },\n            value: 'MISCELLANEOUS'\n          }\n        ]\n      }\n    },\n\n    {\n      type: 'input',\n      block_id: 'currency_block',\n      optional: true,\n      label: {\n        type: 'plain_text',\n        text: 'Currency used',\n        emoji: true\n      },\n      element: {\n        type: 'static_select',\n        action_id: 'currency',\n        placeholder: {\n          type: 'plain_text',\n          text: 'Select currency'\n        },\n        initial_option: {\n          text: {\n            type: 'plain_text',\n            text: 'Let the system determine'\n          },\n          value: 'AUTO'\n        },\n        options: [\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Let the system determine'\n            },\n            value: 'AUTO'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'GBP (£)'\n            },\n            value: 'GBP'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'USD ($)'\n            },\n            value: 'USD'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'EUR (€)'\n            },\n            value: 'EUR'\n          },\n          {\n            text: {\n              type: 'plain_text',\n              text: 'Other'\n            },\n            value: 'OTHER'\n          }\n        ]\n      },\n      hint: {\n        type: 'plain_text',\n        text: 'Leave as system determination when the receipt does not clearly show the currency.'\n      }\n    },\n\n    {\n      type: 'input',\n      block_id: 'receipt_block',\n      label: {\n        type: 'plain_text',\n        text: 'Receipt / proof',\n        emoji: true\n      },\n      element: {\n        type: 'file_input',\n        action_id: 'receipt_file',\n        filetypes: [\n          'jpg',\n          'jpeg',\n          'png',\n          'webp',\n          'pdf'\n        ],\n        max_files: 1\n      },\n      hint: {\n        type: 'plain_text',\n        text: 'Upload the receipt or other proof of purchase.'\n      }\n    }\n  ]\n};\n\nreturn [\n  {\n    json: {\n      trigger_id: body.trigger_id,\n      view: modal\n    }\n  }\n];"
       },
-      "type": "n8n-nodes-base.slack",
-      "typeVersion": 2.4,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
-        -448,
-        3552
+        -1280,
+        2336
       ],
-      "id": "d637b2bb-5f64-42f2-9440-2fd029558fc4",
-      "name": "No Receipt Provided1",
-      "webhookId": "77725a2f-b86b-442a-b598-ef8b8ae4d473",
+      "id": "8380c075-47cd-4a5d-b121-4a28834689e5",
+      "name": "Build Expense Modal1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://slack.com/api/views.open",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "slackApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ trigger_id: $json.trigger_id, view: $json.view }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -1040,
+        2336
+      ],
+      "id": "fba0685f-ac61-436f-9d3f-02484f30ccae",
+      "name": "Open Expense Modal1",
       "credentials": {
         "slackApi": {
           "id": "djVYSfjjkVbmFcP4",
@@ -985,75 +901,42 @@
     },
     {
       "parameters": {
-        "select": "channel",
-        "channelId": {
-          "__rl": true,
-          "mode": "id",
-          "value": "={{ $('Slack Trigger1').item.json.channel }}"
-        },
-        "text": "I received your file, but I can't process that file type. Please upload the receipt as a JPG, PNG, or PDF.",
-        "otherOptions": {
-          "thread_ts": {
-            "replyValues": {
-              "thread_ts": "={{ $('Slack Trigger1').item.json.ts }}"
-            }
-          }
-        }
-      },
-      "type": "n8n-nodes-base.slack",
-      "typeVersion": 2.4,
-      "position": [
-        -208,
-        3488
-      ],
-      "id": "d4b523c2-8200-4a0f-97f2-e37be5eb559f",
-      "name": "Unsupported File1",
-      "webhookId": "f0d240c5-5a8f-4295-93b2-ea4bc8def789",
-      "credentials": {
-        "slackApi": {
-          "id": "djVYSfjjkVbmFcP4",
-          "name": "c25-farah-slack"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "const metadata = $('Extract Receipt Metadata1').first().json;\n\n// Get the actual binary bytes from n8n.\n// This is important because binary.data may contain a filesystem-v2\n// reference instead of the actual base64 content.\nconst buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n\nif (!buffer || buffer.length === 0) {\n  throw new Error('Receipt binary data is empty or could not be read.');\n}\n\nconst mimeType = metadata.mime_type || 'image/png';\nconst base64 = buffer.toString('base64');\n\nlet openai_content;\n\nif (mimeType === 'application/pdf') {\n  openai_content = {\n    type: 'input_file',\n    filename: metadata.file_name || 'receipt.pdf',\n    file_data: `data:${mimeType};base64,${base64}`\n  };\n} else {\n  openai_content = {\n    type: 'input_image',\n    image_url: `data:${mimeType};base64,${base64}`,\n    detail: 'high'\n  };\n}\n\nreturn [\n  {\n    json: {\n      ...metadata,\n      openai_content\n    }\n  }\n];"
+        "jsCode": "const submission = $('Normalise Expense Submission').first().json;\n\n// Get the actual receipt bytes from Download Modal Receipt.\nconst buffer = await this.helpers.getBinaryDataBuffer(0, 'data');\n\nif (!buffer || buffer.length === 0) {\n  throw new Error('Receipt binary data is empty or could not be read.');\n}\n\nconst base64 = buffer.toString('base64');\n\nconst mimeType =\n  submission.receipt_mime_type ||\n  'image/png';\n\nconst fileName =\n  submission.receipt_file_name ||\n  'receipt';\n\nconst userCurrency =\n  submission.currency ||\n  'AUTO';\n\nlet openai_content;\n\nif (mimeType === 'application/pdf') {\n  openai_content = {\n    type: 'input_file',\n    filename: fileName,\n    file_data: `data:${mimeType};base64,${base64}`\n  };\n} else {\n  openai_content = {\n    type: 'input_image',\n    image_url: `data:${mimeType};base64,${base64}`,\n    detail: 'high'\n  };\n}\n\nreturn [\n  {\n    json: {\n      ...submission,\n\n      openai_content,\n\n      submission_context: {\n        category: submission.category || '',\n        category_label: submission.category_label || '',\n        currency: userCurrency,\n        currency_was_supplied_by_employee:\n          userCurrency !== 'AUTO'\n      }\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        0,
-        3280
+        208,
+        2736
       ],
-      "id": "d946a0b5-2054-4715-b867-749240733967",
-      "name": "Prepare Vision Input1"
+      "id": "8b5f0139-ec40-4b95-a54c-77f8c98ee3f3",
+      "name": "Prepare Vision Input2"
     },
     {
       "parameters": {
-        "jsCode": "const response = $json;\n\nlet outputText = null;\n\nif (Array.isArray(response.output)) {\n  for (const outputItem of response.output) {\n    if (!Array.isArray(outputItem.content)) continue;\n\n    for (const contentItem of outputItem.content) {\n      if (contentItem.type === 'output_text' && typeof contentItem.text === 'string') {\n        outputText = contentItem.text;\n        break;\n      }\n    }\n\n    if (outputText) break;\n  }\n}\n\nif (!outputText && typeof response.output_text === 'string') {\n  outputText = response.output_text;\n}\n\nif (!outputText) {\n  throw new Error('OpenAI returned no structured receipt extraction.');\n}\n\nlet extraction;\n\ntry {\n  extraction = JSON.parse(outputText);\n} catch (error) {\n  throw new Error(`Could not parse OpenAI receipt JSON: ${error.message}`);\n}\n\nconst metadata = $('Extract Receipt Metadata1').first().json;\n\nreturn [\n  {\n    json: {\n      ...metadata,\n      extraction\n    }\n  }\n];"
+        "jsCode": "const response = $json;\n\nlet outputText = null;\n\nif (Array.isArray(response.output)) {\n  for (const outputItem of response.output) {\n\n    if (!Array.isArray(outputItem.content)) {\n      continue;\n    }\n\n    for (const contentItem of outputItem.content) {\n\n      if (\n        contentItem.type === 'output_text' &&\n        typeof contentItem.text === 'string'\n      ) {\n        outputText = contentItem.text;\n        break;\n      }\n    }\n\n    if (outputText) {\n      break;\n    }\n  }\n}\n\nif (\n  !outputText &&\n  typeof response.output_text === 'string'\n) {\n  outputText = response.output_text;\n}\n\nif (!outputText) {\n  throw new Error(\n    'OpenAI returned no receipt extraction result.'\n  );\n}\n\nlet extraction;\n\ntry {\n  extraction = JSON.parse(outputText);\n} catch (error) {\n  throw new Error(\n    `Could not parse receipt extraction JSON: ${error.message}`\n  );\n}\n\nconst submission =\n  $('Normalise Expense Submission').first().json;\n\nreturn [\n  {\n    json: {\n      ...submission,\n\n      extraction\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        480,
-        3280
+        672,
+        2736
       ],
-      "id": "f5d2b305-df3e-4db9-976d-21a1fbf8fc17",
-      "name": "Parse OCR Result1"
+      "id": "9dacd392-1d94-419a-9c67-7353ef3868fe",
+      "name": "Parse OCR Result2"
     },
     {
       "parameters": {
-        "jsCode": "const extraction = $json.extraction || {};\n\nconst problems = [];\n\nif (extraction.receipt_valid !== true) {\n  problems.push('Receipt could not be confidently identified as a valid receipt.');\n}\n\nif (!extraction.merchant || extraction.merchant.trim() === '') {\n  problems.push('Merchant could not be extracted.');\n}\n\nif (!extraction.transaction_date || extraction.transaction_date.trim() === '') {\n  problems.push('Transaction date could not be extracted.');\n}\n\nif (!extraction.currency || extraction.currency.trim() === '') {\n  problems.push('Currency could not be extracted.');\n}\n\nif (typeof extraction.total !== 'number' || extraction.total <= 0) {\n  problems.push('A valid total could not be extracted.');\n}\n\nif (typeof extraction.extraction_confidence !== 'number' || extraction.extraction_confidence < 0.75) {\n  problems.push('Extraction confidence is below the required threshold.');\n}\n\nif (Array.isArray(extraction.unclear_fields) && extraction.unclear_fields.length > 0) {\n  problems.push(`Unclear fields: ${extraction.unclear_fields.join(', ')}`);\n}\n\nconst subtotal = Number(extraction.subtotal || 0);\nconst tax = Number(extraction.tax || 0);\nconst total = Number(extraction.total || 0);\n\nif (subtotal > 0 && total > 0) {\n  const difference = Math.abs((subtotal + tax) - total);\n\n  if (difference > 0.05) {\n    problems.push('Subtotal plus tax does not reconcile with the extracted total.');\n  }\n}\n\nconst lineItems = Array.isArray(extraction.line_items)\n  ? extraction.line_items\n  : [];\n\nif (lineItems.length > 0 && subtotal > 0) {\n  const lineItemTotal = lineItems.reduce(\n    (sum, item) => sum + Number(item.amount || 0),\n    0\n  );\n\n  if (Math.abs(lineItemTotal - subtotal) > 0.05) {\n    problems.push('Line item amounts do not reconcile with the extracted subtotal.');\n  }\n}\n\nconst needsReview = problems.length > 0 || extraction.needs_review === true;\n\nreturn [\n  {\n    json: {\n      ...$json,\n      extraction_quality_passed: !needsReview,\n      needs_review: needsReview,\n      validation_problems: problems\n    }\n  }\n];"
+        "jsCode": "const extraction = $json.extraction || {};\n\nconst problems = [];\n\nif (extraction.receipt_valid !== true) {\n  problems.push(\n    'Receipt could not be confidently identified as a valid receipt.'\n  );\n}\n\nif (\n  !extraction.merchant ||\n  extraction.merchant.trim() === ''\n) {\n  problems.push(\n    'Merchant could not be extracted.'\n  );\n}\n\nif (\n  !extraction.transaction_date ||\n  extraction.transaction_date.trim() === ''\n) {\n  problems.push(\n    'Transaction date could not be extracted.'\n  );\n}\n\nif (\n  typeof extraction.total !== 'number' ||\n  extraction.total <= 0\n) {\n  problems.push(\n    'A valid total could not be extracted.'\n  );\n}\n\nif (\n  typeof extraction.extraction_confidence !== 'number' ||\n  extraction.extraction_confidence < 0.75\n) {\n  problems.push(\n    'Extraction confidence is below the required threshold.'\n  );\n}\n\nif (\n  Array.isArray(extraction.unclear_fields) &&\n  extraction.unclear_fields.length > 0\n) {\n  problems.push(\n    `Unclear fields: ${extraction.unclear_fields.join(', ')}`\n  );\n}\n\nif (\n  extraction.currency_status === 'NEEDS_REVIEW'\n) {\n  problems.push(\n    'Currency could not be determined reliably.'\n  );\n}\n\nconst subtotal = Number(\n  extraction.subtotal || 0\n);\n\nconst tax = Number(\n  extraction.tax || 0\n);\n\nconst total = Number(\n  extraction.total || 0\n);\n\nif (subtotal > 0 && total > 0) {\n\n  const difference = Math.abs(\n    (subtotal + tax) - total\n  );\n\n  if (difference > 0.05) {\n    problems.push(\n      'Subtotal plus tax does not reconcile with total.'\n    );\n  }\n}\n\nconst lineItems =\n  Array.isArray(extraction.line_items)\n    ? extraction.line_items\n    : [];\n\nif (\n  lineItems.length > 0 &&\n  subtotal > 0\n) {\n\n  const lineItemTotal =\n    lineItems.reduce(\n      (sum, item) =>\n        sum + Number(item.amount || 0),\n      0\n    );\n\n  if (\n    Math.abs(\n      lineItemTotal - subtotal\n    ) > 0.05\n  ) {\n    problems.push(\n      'Line item amounts do not reconcile with subtotal.'\n    );\n  }\n}\n\nconst needsReview =\n  problems.length > 0 ||\n  extraction.needs_review === true;\n\nreturn [\n  {\n    json: {\n      ...$json,\n\n      extraction_quality_passed:\n        !needsReview,\n\n      needs_review:\n        needsReview,\n\n      validation_problems:\n        problems\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        720,
-        3280
+        912,
+        2736
       ],
-      "id": "2e6eecfd-e16f-4dbe-9bfc-c076cfd601a2",
-      "name": "Extraction Quality Check1"
+      "id": "f510ad19-d7e1-4fdc-a39c-d7ffcaacdbe3",
+      "name": "Extraction Quality Check2"
     },
     {
       "parameters": {
@@ -1083,11 +966,11 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        960,
-        3280
+        1152,
+        2736
       ],
-      "id": "fe8a4bfd-c52f-4baa-bdd9-8cf0224cdb4e",
-      "name": "Extraction Valid?1"
+      "id": "5b654ed4-97ee-492e-b287-a8809233b0ca",
+      "name": "Extraction Valid?2"
     },
     {
       "parameters": {
@@ -1095,13 +978,13 @@
         "channelId": {
           "__rl": true,
           "mode": "id",
-          "value": "={{ $('Slack Trigger1').item.json.channel }}"
+          "value": "={{ $('Slack Trigger').item.json.channel }}"
         },
         "text": "I couldn't reliably read this receipt. Please upload a clearer photo or PDF. Your expense has been sent for review rather than automatically rejected.",
         "otherOptions": {
           "thread_ts": {
             "replyValues": {
-              "thread_ts": "={{ $('Slack Trigger1').item.json.ts }}"
+              "thread_ts": "={{ $('Slack Trigger').item.json.ts }}"
             }
           }
         }
@@ -1109,11 +992,11 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
       "position": [
-        1200,
-        3424
+        1392,
+        2880
       ],
-      "id": "9ee6f684-7574-49be-823a-5dffe20125c8",
-      "name": "Receipt Needs Review1",
+      "id": "221225b3-202f-4911-9db1-9820f35370dd",
+      "name": "Receipt Needs Review2",
       "webhookId": "d31540f6-875d-48a4-8d80-f33f301c8d71",
       "credentials": {
         "slackApi": {
@@ -1130,17 +1013,17 @@
         "nodeCredentialType": "openAiApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  model: 'gpt-5',\n  store: false,\n  input: [\n    {\n      role: 'user',\n      content: [\n        {\n          type: 'input_text',\n          text: `You are the receipt extraction component of an expense intelligence system.\n\nExtract ONLY information that is visible on the receipt. Do not guess, invent, or add information that cannot reasonably be supported by the receipt.\n\nExtract:\n- merchant\n- transaction date\n- currency\n- subtotal\n- tax\n- total\n- every visible line item\n\nFor each line item:\n- description must match the visible item description\n- unit_price must be the price of one unit where available\n- amount must be the total amount for that line\n- quantity must be the visible quantity when the receipt explicitly shows one\n- if the receipt shows one ordinary item on a line and does not display a quantity, use quantity = 1\n- NEVER use quantity = 0 for a purchased line item\n- if the quantity is genuinely unreadable or ambiguous, use quantity = 1 only when the line amount equals the unit price; otherwise add \"line_items.quantity\" to unclear_fields and set needs_review = true\n\nFor currency:\n- If a currency symbol or code is printed on the receipt (for example $, £, €, USD, GBP, EUR), use that.\n- If no symbol is printed, infer the currency from other visible clues: the merchant name and country, the address, the language, or the date format.\n- Return the currency as a 3-letter ISO code (for example USD, GBP, EUR).\n- If the currency genuinely cannot be determined from the receipt, set currency to \"UNKNOWN\", add \"currency\" to unclear_fields, and set needs_review = true.\n- Do not default to any single currency when the receipt gives no reliable signal. An honest \"UNKNOWN\" is required over a confident guess.\n\nFor merchant name:\n- Extract the core business name only, ignoring stylistic elements of the logo such as stars, dots, or other symbols used as decoration between words (for example \"WAL★MART\" should be extracted as \"WALMART\", not \"WAL-MART\" or \"WAL*MART\").\n- Do not insert a hyphen, asterisk, or space in place of a decorative symbol you cannot otherwise represent.\n- Preserve the merchant's actual spelling and capitalization as it normally appears in writing, not exactly as stylized on the receipt.\n\nA receipt should be marked receipt_valid=false if it is not actually a receipt, is too unclear to read reliably, or essential information cannot be recovered.\n\nUse an empty string for an unreadable text field and 0 only for genuinely unavailable numeric fields other than quantity.\n\nThe extraction_confidence must represent your confidence that the extracted receipt data is accurate.\n\nSet needs_review=true whenever the receipt is unclear, essential information is missing, or you are not confident in the extraction.\n\nBefore returning the result, check that:\n- subtotal + tax approximately equals total\n- line item amounts approximately reconcile with the subtotal\n- quantities are positive for purchased items`\n        },\n        $json.openai_content\n      ]\n    }\n  ],\n  text: {\n    format: {\n      type: 'json_schema',\n      name: 'receipt_extraction',\n      strict: true,\n      schema: {\n        type: 'object',\n        additionalProperties: false,\n        properties: {\n          receipt_valid: { type: 'boolean' },\n          merchant: { type: 'string' },\n          transaction_date: { type: 'string' },\n          currency: { type: 'string' },\n          subtotal: { type: 'number' },\n          tax: { type: 'number' },\n          total: { type: 'number' },\n          line_items: {\n            type: 'array',\n            items: {\n              type: 'object',\n              additionalProperties: false,\n              properties: {\n                description: { type: 'string' },\n                quantity: { type: 'number', \"minimum\": 1 },\n                unit_price: { type: 'number' },\n                amount: { type: 'number' }\n              },\n              required: [\n                'description',\n                'quantity',\n                'unit_price',\n                'amount'\n              ]\n            }\n          },\n          extraction_confidence: { type: 'number' },\n          unclear_fields: {\n            type: 'array',\n            items: { type: 'string' }\n          },\n          needs_review: { type: 'boolean' },\n          review_reason: { type: 'string' }\n        },\n        required: [\n          'receipt_valid',\n          'merchant',\n          'transaction_date',\n          'currency',\n          'subtotal',\n          'tax',\n          'total',\n          'line_items',\n          'extraction_confidence',\n          'unclear_fields',\n          'needs_review',\n          'review_reason'\n        ]\n      }\n    }\n  }\n}) }}",
+        "jsonBody": "={{\nJSON.stringify({\n  model: 'gpt-5',\n  store: false,\n\n  input: [\n    {\n      role: 'system',\n      content: [\n        {\n          type: 'input_text',\n          text: `\nYou are the receipt extraction component of an employee expense intelligence system.\n\nExtract ONLY information that is visible on the receipt. Do not invent information.\n\nThe employee has already supplied an expense category through the submission form. Do not re-classify the expense category.\n\nThe employee may also have supplied a currency:\n- If employee_currency is not AUTO, use that currency as the submission currency.\n- If employee_currency is AUTO, first look for an explicit currency on the receipt.\n- If the receipt does not explicitly state a currency, use visible merchant/location/address information to make an inference only when confidence is high.\n- If currency still cannot be determined reliably, set currency_status to NEEDS_REVIEW.\n\nExtract:\n- merchant\n- transaction date\n- currency\n- subtotal\n- tax\n- total\n- every visible line item\n\nFor every line item:\n- quantity should normally be 1 when a single purchased item is shown and no explicit quantity is displayed.\n- Never use quantity 0 for a purchased item.\n- Only use a quantity other than 1 when the receipt explicitly supports it.\n\nDo not guess unreadable values.\n\nA receipt should be marked receipt_valid=false if it is not actually a receipt or if it is too unclear to extract essential information reliably.\n\nSet needs_review=true when:\n- essential information is missing,\n- the receipt is unclear,\n- currency cannot be reliably determined,\n- or extraction confidence is below 0.75.\n\nBefore returning the result, check that:\n- subtotal + tax approximately equals total\n- line item amounts approximately reconcile with subtotal\n`\n        }\n      ]\n    },\n\n    {\n      role: 'user',\n      content: [\n        {\n          type: 'input_text',\n          text: `\nEmployee submission information:\n\nCategory:\n${$json.submission_context.category_label}\n\nCurrency selected by employee:\n${$json.submission_context.currency}\n\nCurrency supplied by employee:\n${$json.submission_context.currency_was_supplied_by_employee}\n\nUse the uploaded receipt as the source for receipt extraction.\n`\n        },\n\n        $json.openai_content\n      ]\n    }\n  ],\n\n  text: {\n    format: {\n      type: 'json_schema',\n      name: 'receipt_extraction',\n      strict: true,\n\n      schema: {\n        type: 'object',\n        additionalProperties: false,\n\n        properties: {\n          receipt_valid: {\n            type: 'boolean'\n          },\n\n          merchant: {\n            type: 'string'\n          },\n\n          transaction_date: {\n            type: 'string'\n          },\n\n          currency: {\n            type: 'string'\n          },\n\n          currency_status: {\n            type: 'string',\n            enum: [\n              'EMPLOYEE_SUPPLIED',\n              'RECEIPT_EXPLICIT',\n              'AI_INFERRED',\n              'NEEDS_REVIEW'\n            ]\n          },\n\n          subtotal: {\n            type: 'number'\n          },\n\n          tax: {\n            type: 'number'\n          },\n\n          total: {\n            type: 'number'\n          },\n\n          line_items: {\n            type: 'array',\n\n            items: {\n              type: 'object',\n              additionalProperties: false,\n\n              properties: {\n                description: {\n                  type: 'string'\n                },\n\n                quantity: {\n                  type: 'number',\n                  minimum: 1\n                },\n\n                unit_price: {\n                  type: 'number'\n                },\n\n                amount: {\n                  type: 'number'\n                }\n              },\n\n              required: [\n                'description',\n                'quantity',\n                'unit_price',\n                'amount'\n              ]\n            }\n          },\n\n          extraction_confidence: {\n            type: 'number',\n            minimum: 0,\n            maximum: 1\n          },\n\n          unclear_fields: {\n            type: 'array',\n            items: {\n              type: 'string'\n            }\n          },\n\n          needs_review: {\n            type: 'boolean'\n          },\n\n          review_reason: {\n            type: 'string'\n          }\n        },\n\n        required: [\n          'receipt_valid',\n          'merchant',\n          'transaction_date',\n          'currency',\n          'currency_status',\n          'subtotal',\n          'tax',\n          'total',\n          'line_items',\n          'extraction_confidence',\n          'unclear_fields',\n          'needs_review',\n          'review_reason'\n        ]\n      }\n    }\n  }\n})\n}}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
       "position": [
-        256,
-        3280
+        448,
+        2736
       ],
-      "id": "60358e33-e3b9-4c04-8233-45962a4e6ff2",
-      "name": "OpenAI Vision OCR1",
+      "id": "654e81cd-f199-4310-b9aa-929b13cf1874",
+      "name": "OpenAI Vision OCR2",
       "credentials": {
         "openAiApi": {
           "id": "2R0jsJVAPvxIn6D8",
@@ -1150,55 +1033,55 @@
     },
     {
       "parameters": {
-        "jsCode": "const metadata = {\n  source: $json.source,\n  submitter_id: $json.submitter_id,\n  channel_id: $json.channel_id,\n  message_ts: $json.message_ts,\n  message_text: $json.message_text,\n  submitted_at: $json.submitted_at,\n  receipt_id: $json.receipt_id,\n  file_name: $json.file_name,\n  mime_type: $json.mime_type\n};\n\nconst extraction = $json.extraction || {};\n\nconst currencyMap = {\n  '£': 'GBP',\n  'GBP': 'GBP',\n  '$': 'USD',\n  'USD': 'USD',\n  '€': 'EUR',\n  'EUR': 'EUR'\n};\n\nconst currency = currencyMap[extraction.currency] || extraction.currency || 'UNKNOWN';\n\nreturn [\n  {\n    json: {\n      ...metadata,\n      audit_payload: {\n        expense_id: $json.receipt_id,\n        source: 'slack',\n        submitter_id: $json.submitter_id,\n        channel_id: $json.channel_id,\n        message_ts: $json.message_ts,\n        message_text: $json.message_text,\n        submitted_at: $json.submitted_at,\n\n        receipt: {\n          receipt_id: $json.receipt_id,\n          file_name: $json.file_name,\n          mime_type: $json.mime_type,\n          merchant: extraction.merchant || '',\n          transaction_date: extraction.transaction_date || '',\n          currency,\n          subtotal: Number(extraction.subtotal || 0),\n          tax: Number(extraction.tax || 0),\n          total: Number(extraction.total || 0),\n          line_items: Array.isArray(extraction.line_items)\n            ? extraction.line_items\n            : []\n        },\n\n        extraction: {\n          confidence: Number(extraction.extraction_confidence || 0),\n          unclear_fields: Array.isArray(extraction.unclear_fields)\n            ? extraction.unclear_fields\n            : [],\n          needs_review: extraction.needs_review === true\n        }\n      }\n    }\n  }\n];"
+        "jsCode": "const extraction = $json.extraction || {};\n\nconst submission =\n  $('Normalise Expense Submission').first().json;\n\nconst category =\n  submission.category || '';\n\nconst categoryLabel =\n  submission.category_label || '';\n\nconst submittedCurrency =\n  submission.currency || 'AUTO';\n\nlet finalCurrency =\n  extraction.currency || '';\n\nif (\n  submittedCurrency !== 'AUTO'\n) {\n  finalCurrency = submittedCurrency;\n}\n\nreturn [\n  {\n    json: {\n      ...$json,\n\n      audit_payload: {\n\n        expense_id:\n          submission.receipt_file_id ||\n          `expense-${Date.now()}`,\n\n        source:\n          'slack_modal',\n\n        submitter_id:\n          submission.submitter_id || '',\n\n        channel_id:\n          submission.channel_id || '',\n\n        submitted_at:\n          submission.submitted_at || '',\n\n        submission: {\n          category,\n          category_label: categoryLabel,\n\n          currency_selected:\n            submittedCurrency\n        },\n\n        receipt: {\n          receipt_id:\n            submission.receipt_file_id || '',\n\n          file_name:\n            submission.receipt_file_name || '',\n\n          mime_type:\n            submission.receipt_mime_type || '',\n\n          merchant:\n            extraction.merchant || '',\n\n          transaction_date:\n            extraction.transaction_date || '',\n\n          currency:\n            finalCurrency,\n\n          currency_status:\n            extraction.currency_status || '',\n\n          subtotal:\n            Number(extraction.subtotal || 0),\n\n          tax:\n            Number(extraction.tax || 0),\n\n          total:\n            Number(extraction.total || 0),\n\n          line_items:\n            Array.isArray(extraction.line_items)\n              ? extraction.line_items\n              : []\n        },\n\n        extraction: {\n\n          confidence:\n            Number(\n              extraction.extraction_confidence || 0\n            ),\n\n          unclear_fields:\n            Array.isArray(\n              extraction.unclear_fields\n            )\n              ? extraction.unclear_fields\n              : [],\n\n          needs_review:\n            extraction.needs_review === true\n        }\n      }\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1184,
-        3264
+        1376,
+        2720
       ],
-      "id": "80933354-33b4-440e-8648-2619607d3db2",
-      "name": "Build Audit Payload1"
+      "id": "eaf72609-d413-4c9c-afbc-9eeb42f19c11",
+      "name": "Build Audit Payload2"
     },
     {
       "parameters": {
-        "jsCode": "const payload = $json.audit_payload || {};\nconst receipt = payload.receipt || {};\nconst extraction = payload.extraction || {};\n\nconst total = Number(receipt.total || 0);\n\n// -----------------------------\n// Parse receipt transaction date\n// -----------------------------\nfunction parseTransactionDate(value) {\n  if (!value || typeof value !== 'string') return null;\n\n  // UK format: DD/MM/YYYY\n  const uk = value.match(/^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/);\n\n  if (uk) {\n    const day = Number(uk[1]);\n    const month = Number(uk[2]) - 1;\n    const year = Number(uk[3]);\n    return new Date(Date.UTC(year, month, day, 12, 0, 0));\n  }\n\n  const parsed = new Date(value);\n  return Number.isNaN(parsed.getTime()) ? null : parsed;\n}\n\n// -----------------------------\n// Add one calendar month\n// -----------------------------\nfunction addOneMonth(date) {\n  const result = new Date(date.getTime());\n  const originalDay = result.getUTCDate();\n\n  result.setUTCMonth(result.getUTCMonth() + 1);\n\n  // Handle dates such as 31 January -> 28 February\n  if (result.getUTCDate() < originalDay) {\n    result.setUTCDate(0);\n  }\n\n  return result;\n}\n\nconst transactionDate = parseTransactionDate(receipt.transaction_date);\n\nlet submissionDate = null;\n\nif (payload.submitted_at !== null && payload.submitted_at !== undefined) {\n  const timestamp = Number(payload.submitted_at);\n\n  if (Number.isFinite(timestamp)) {\n    submissionDate = new Date(timestamp * 1000);\n  }\n}\n\nconst cutoffDate = transactionDate\n  ? addOneMonth(transactionDate)\n  : null;\n\nconst cutoffBreached = Boolean(\n  transactionDate &&\n  submissionDate &&\n  submissionDate > cutoffDate\n);\n\n// -----------------------------\n// Approval thresholds\n// Current project rule: £2,000 CFO threshold\n// Handbook baseline: >£250 requires advance line-manager approval\n// -----------------------------\nconst cfoApprovalRequired = total >= 2000;\nconst lineManagerApprovalRequired = total > 250 && total < 2000;\n\nconst flags = [];\nconst approvals = [];\n\nif (cutoffBreached) {\n  flags.push('EXPENSE_OUTSIDE_ONE_MONTH_CUTOFF');\n}\n\nif (cfoApprovalRequired) {\n  flags.push('CFO_APPROVAL_THRESHOLD');\n  approvals.push('CFO_APPROVAL');\n} else if (lineManagerApprovalRequired) {\n  approvals.push('LINE_MANAGER_APPROVAL');\n}\n\nif (extraction.needs_review === true) {\n  flags.push('EXTRACTION_REQUIRES_REVIEW');\n}\n\nif (Array.isArray(extraction.unclear_fields) && extraction.unclear_fields.length > 0) {\n  flags.push('UNCLEAR_RECEIPT_FIELDS');\n}\n\nconst receiptPresent = Boolean(payload.receipt?.receipt_id);\n\nif (!receiptPresent) {\n  flags.push('RECEIPT_MISSING');\n}\n\nconst humanReviewRequired =\n  cutoffBreached ||\n  cfoApprovalRequired ||\n  extraction.needs_review === true ||\n  !receiptPresent;\n\nreturn [\n  {\n    json: {\n      ...$json,\n      policy_checks: {\n        one_month_cutoff: {\n          transaction_date: transactionDate\n            ? transactionDate.toISOString().slice(0, 10)\n            : null,\n          submission_date: submissionDate\n            ? submissionDate.toISOString().slice(0, 10)\n            : null,\n          cutoff_date: cutoffDate\n            ? cutoffDate.toISOString().slice(0, 10)\n            : null,\n          passed: transactionDate && submissionDate\n            ? !cutoffBreached\n            : null,\n          breached: cutoffBreached\n        },\n\n        approval: {\n          total,\n          cfo_threshold: 2000,\n          cfo_approval_required: cfoApprovalRequired,\n          line_manager_threshold: 250,\n          line_manager_approval_required: lineManagerApprovalRequired\n        },\n\n        receipt: {\n          present: receiptPresent\n        },\n\n        flags,\n        approvals_required: approvals,\n        human_review_required: humanReviewRequired\n      }\n    }\n  }\n];"
+        "jsCode": "const payload =\n  $json.audit_payload || {};\n\nconst receipt =\n  payload.receipt || {};\n\nconst extraction =\n  payload.extraction || {};\n\nconst total =\n  Number(receipt.total || 0);\n\nconst flags = [];\n\nconst approvals = [];\n\n\n// -----------------------------\n// Parse transaction date\n// -----------------------------\n\nfunction parseTransactionDate(value) {\n\n  if (\n    !value ||\n    typeof value !== 'string'\n  ) {\n    return null;\n  }\n\n  const uk =\n    value.match(\n      /^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/\n    );\n\n  if (uk) {\n\n    const day =\n      Number(uk[1]);\n\n    const month =\n      Number(uk[2]) - 1;\n\n    const year =\n      Number(uk[3]);\n\n    return new Date(\n      Date.UTC(\n        year,\n        month,\n        day,\n        12,\n        0,\n        0\n      )\n    );\n  }\n\n  const parsed =\n    new Date(value);\n\n  return Number.isNaN(\n    parsed.getTime()\n  )\n    ? null\n    : parsed;\n}\n\n\n// -----------------------------\n// Add one month\n// -----------------------------\n\nfunction addOneMonth(date) {\n\n  const result =\n    new Date(date.getTime());\n\n  const originalDay =\n    result.getUTCDate();\n\n  result.setUTCMonth(\n    result.getUTCMonth() + 1\n  );\n\n  if (\n    result.getUTCDate() <\n    originalDay\n  ) {\n    result.setUTCDate(0);\n  }\n\n  return result;\n}\n\n\nconst transactionDate =\n  parseTransactionDate(\n    receipt.transaction_date\n  );\n\n\nlet submissionDate =\n  null;\n\nif (\n  payload.submitted_at\n) {\n\n  const parsed =\n    new Date(\n      payload.submitted_at\n    );\n\n  if (\n    !Number.isNaN(\n      parsed.getTime()\n    )\n  ) {\n    submissionDate = parsed;\n  }\n}\n\n\nconst cutoffDate =\n  transactionDate\n    ? addOneMonth(\n        transactionDate\n      )\n    : null;\n\n\nconst cutoffBreached =\n  Boolean(\n    transactionDate &&\n    submissionDate &&\n    submissionDate >\n      cutoffDate\n  );\n\n\n// -----------------------------\n// Currency\n// -----------------------------\n\nconst currencyNeedsReview =\n  receipt.currency_status ===\n  'NEEDS_REVIEW';\n\nif (currencyNeedsReview) {\n\n  flags.push(\n    'CURRENCY_REQUIRES_REVIEW'\n  );\n}\n\n\n// -----------------------------\n// Submission deadline\n// -----------------------------\n\nif (cutoffBreached) {\n\n  flags.push(\n    'EXPENSE_OUTSIDE_ONE_MONTH_CUTOFF'\n  );\n}\n\n\n// -----------------------------\n// Approval thresholds\n// -----------------------------\n\nconst cfoApprovalRequired =\n  receipt.currency === 'GBP' &&\n  total >= 2000;\n\n\nconst lineManagerApprovalRequired =\n  receipt.currency === 'GBP' &&\n  total > 250 &&\n  total < 2000;\n\n\nif (cfoApprovalRequired) {\n\n  flags.push(\n    'CFO_APPROVAL_THRESHOLD'\n  );\n\n  approvals.push(\n    'CFO_APPROVAL'\n  );\n\n} else if (\n  lineManagerApprovalRequired\n) {\n\n  approvals.push(\n    'LINE_MANAGER_APPROVAL'\n  );\n}\n\n\n// -----------------------------\n// Extraction\n// -----------------------------\n\nif (\n  extraction.needs_review === true\n) {\n\n  flags.push(\n    'EXTRACTION_REQUIRES_REVIEW'\n  );\n}\n\n\nif (\n  Array.isArray(\n    extraction.unclear_fields\n  ) &&\n  extraction.unclear_fields.length > 0\n) {\n\n  flags.push(\n    'UNCLEAR_RECEIPT_FIELDS'\n  );\n}\n\n\n// -----------------------------\n// Human review\n// -----------------------------\n\nconst humanReviewRequired =\n  cutoffBreached ||\n  currencyNeedsReview ||\n  extraction.needs_review === true ||\n  cfoApprovalRequired;\n\n\nreturn [\n  {\n    json: {\n\n      ...$json,\n\n      policy_checks: {\n\n        one_month_cutoff: {\n\n          transaction_date:\n            transactionDate\n              ? transactionDate\n                  .toISOString()\n                  .slice(0, 10)\n              : null,\n\n          submission_date:\n            submissionDate\n              ? submissionDate\n                  .toISOString()\n                  .slice(0, 10)\n              : null,\n\n          cutoff_date:\n            cutoffDate\n              ? cutoffDate\n                  .toISOString()\n                  .slice(0, 10)\n              : null,\n\n          passed:\n            transactionDate &&\n            submissionDate\n              ? !cutoffBreached\n              : null,\n\n          breached:\n            cutoffBreached\n        },\n\n        approval: {\n\n          total,\n\n          currency:\n            receipt.currency,\n\n          cfo_threshold:\n            2000,\n\n          cfo_approval_required:\n            cfoApprovalRequired,\n\n          line_manager_threshold:\n            250,\n\n          line_manager_approval_required:\n            lineManagerApprovalRequired\n        },\n\n        currency: {\n\n          currency:\n            receipt.currency,\n\n          status:\n            receipt.currency_status,\n\n          needs_review:\n            currencyNeedsReview\n        },\n\n        category: {\n\n          selected_category:\n            payload.submission?.category || '',\n\n          selected_category_label:\n            payload.submission?.category_label || ''\n        },\n\n        flags,\n\n        approvals_required:\n          approvals,\n\n        human_review_required:\n          humanReviewRequired\n      }\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1424,
-        3264
+        1616,
+        2720
       ],
-      "id": "5371fd85-eb75-459b-9a2b-72c989fcf658",
-      "name": "Deterministic Policy Checks1"
+      "id": "6a58c185-4c68-429f-9f2e-b985f98d63c3",
+      "name": "Deterministic Policy Checks2"
     },
     {
       "parameters": {
-        "jsCode": "const payload = $json.audit_payload || {};\nconst policy = $json.policy_checks || {};\n\nreturn [\n  {\n    json: {\n      ...$json,\n      audit_engine_input: {\n        expense_id: payload.expense_id,\n        submitted_by: payload.submitter_id,\n        source: payload.source,\n        receipt: payload.receipt,\n        extraction: payload.extraction,\n        policy_checks: policy,\n        audit_context: {\n          preliminary_status: policy.human_review_required\n            ? 'NEEDS_REVIEW'\n            : 'READY_FOR_AUDIT',\n          deterministic_flags: policy.flags || [],\n          approvals_required: policy.approvals_required || [],\n          human_review_required: policy.human_review_required === true\n        }\n      }\n    }\n  }\n];"
+        "jsCode": "const payload =\n  $json.audit_payload || {};\n\nconst policy =\n  $json.policy_checks || {};\n\nreturn [\n  {\n    json: {\n\n      ...$json,\n\n      audit_engine_input: {\n\n        expense_id:\n          payload.expense_id,\n\n        submitted_by:\n          payload.submitter_id,\n\n        source:\n          payload.source,\n\n        submission:\n          payload.submission || {},\n\n        receipt:\n          payload.receipt || {},\n\n        extraction:\n          payload.extraction || {},\n\n        policy_checks:\n          policy,\n\n        audit_context: {\n\n          preliminary_status:\n            policy.human_review_required\n              ? 'NEEDS_REVIEW'\n              : 'READY_FOR_AUDIT',\n\n          deterministic_flags:\n            policy.flags || [],\n\n          approvals_required:\n            policy.approvals_required || [],\n\n          human_review_required:\n            policy.human_review_required === true\n        }\n      }\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1664,
-        3264
+        1856,
+        2720
       ],
-      "id": "2caef0e2-9275-4168-a71f-29bfead47b17",
-      "name": "Audit Engine Input1"
+      "id": "7c7e095d-90b7-4c38-b93d-ba5173ddbcd6",
+      "name": "Audit Engine Input2"
     },
     {
       "parameters": {
-        "jsCode": "const input = $json.audit_engine_input || {};\nconst receipt = input.receipt || {};\nconst policy = input.policy_checks || {};\nconst context = input.audit_context || {};\n\nreturn [\n  {\n    json: {\n      ...$json,\n      audit_reasoning_input: {\n        expense_id: input.expense_id,\n        submitted_by: input.submitted_by,\n        employee_message: input.receipt?.message_text || $json.message_text || '',\n        merchant: receipt.merchant || '',\n        transaction_date: receipt.transaction_date || '',\n        currency: receipt.currency || '',\n        subtotal: Number(receipt.subtotal || 0),\n        tax: Number(receipt.tax || 0),\n        total: Number(receipt.total || 0),\n        line_items: Array.isArray(receipt.line_items)\n          ? receipt.line_items\n          : [],\n        deterministic_flags: context.deterministic_flags || policy.flags || [],\n        approvals_required: context.approvals_required || policy.approvals_required || [],\n        human_review_required: context.human_review_required === true || policy.human_review_required === true\n      }\n    }\n  }\n];"
+        "jsCode": "const input =\n  $json.audit_engine_input || {};\n\nconst receipt =\n  input.receipt || {};\n\nconst submission =\n  input.submission || {};\n\nconst policy =\n  input.policy_checks || {};\n\nreturn [\n  {\n    json: {\n\n      ...$json,\n\n      audit_reasoning_input: {\n\n        expense_id:\n          input.expense_id,\n\n        submitted_by:\n          input.submitted_by,\n\n        category:\n          submission.category_label ||\n          submission.category ||\n          '',\n\n        merchant:\n          receipt.merchant || '',\n\n        transaction_date:\n          receipt.transaction_date || '',\n\n        currency:\n          receipt.currency || '',\n\n        currency_status:\n          receipt.currency_status || '',\n\n        subtotal:\n          Number(\n            receipt.subtotal || 0\n          ),\n\n        tax:\n          Number(\n            receipt.tax || 0\n          ),\n\n        total:\n          Number(\n            receipt.total || 0\n          ),\n\n        line_items:\n          Array.isArray(\n            receipt.line_items\n          )\n            ? receipt.line_items\n            : [],\n\n        deterministic_flags:\n          policy.flags || [],\n\n        approvals_required:\n          policy.approvals_required ||\n          [],\n\n        human_review_required:\n          policy.human_review_required === true\n      }\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1872,
-        3264
+        2064,
+        2720
       ],
-      "id": "f59fc676-6774-4125-9d0c-b321af93b40b",
-      "name": "Prepare Audit Context1"
+      "id": "4e1a2c3e-ffe3-47b7-bd7b-35daaa042d61",
+      "name": "Prepare Audit Context2"
     },
     {
       "parameters": {
@@ -1208,17 +1091,17 @@
         "nodeCredentialType": "openAiApi",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({\n  model: 'gpt-5',\n  store: false,\n  input: [\n    {\n      role: 'system',\n      content: [\n        {\n          type: 'input_text',\n          text: `You are the contextual reasoning component of an employee expense auditing system.\\n\\nThe deterministic policy layer has already checked objective rules. Do not override deterministic results.\\n\\nYour task is to assess contextual reasonableness using the information supplied. The central business question is: does this expense reasonably help the employee do their job?\\n\\nConsider the merchant, line items, total, employee explanation, and deterministic policy flags.\\n\\nDo not invent facts. Do not assume that an unfamiliar merchant is fraudulent. Do not automatically reject an expense merely because it is unusual.\\n\\nFlag an expense for human review when the business purpose is unclear, the purchase looks potentially personal, the expense appears unreasonable in context, the evidence is insufficient, or deterministic policy flags indicate review.\\n\\nA human reviewer must make the final approval or rejection decision for flagged expenses.`\n        }\n      ]\n    },\n    {\n      role: 'user',\n      content: [\n        {\n          type: 'input_text',\n          text: `Assess this expense:\\n\\n${JSON.stringify($json.audit_reasoning_input, null, 2)}`\n        }\n      ]\n    }\n  ],\n  text: {\n    format: {\n      type: 'json_schema',\n      name: 'expense_contextual_audit',\n      strict: true,\n      schema: {\n        type: 'object',\n        additionalProperties: false,\n        properties: {\n          business_purpose_clear: {\n            type: 'boolean'\n          },\n          business_relevance: {\n            type: 'string',\n            enum: [\n              'CLEAR',\n              'PLAUSIBLE',\n              'UNCLEAR',\n              'LIKELY_PERSONAL'\n            ]\n          },\n          reasonableness: {\n            type: 'string',\n            enum: [\n              'REASONABLE',\n              'QUESTIONABLE',\n              'UNREASONABLE',\n              'INSUFFICIENT_INFORMATION'\n            ]\n          },\n          category: {\n            type: 'string',\n            enum: [\n              'TRAVEL',\n              'ACCOMMODATION',\n              'SUBSISTENCE',\n              'CLIENT_ENTERTAINMENT',\n              'STAFF_ENTERTAINMENT',\n              'SOFTWARE_TECHNOLOGY',\n              'TRAINING',\n              'OFFICE_SUPPLIES',\n              'POSTAGE_COURIER',\n              'PROFESSIONAL_SUBSCRIPTION',\n              'MISCELLANEOUS',\n              'OTHER'\n            ]\n          },\n          risk_factors: {\n            type: 'array',\n            items: {\n              type: 'string'\n            }\n          },\n          positive_factors: {\n            type: 'array',\n            items: {\n              type: 'string'\n            }\n          },\n          recommended_action: {\n            type: 'string',\n            enum: [\n              'PASS',\n              'NEEDS_EMPLOYEE_EXPLANATION',\n              'NEEDS_HUMAN_REVIEW'\n            ]\n          },\n          confidence: {\n            type: 'number',\n            minimum: 0,\n            maximum: 1\n          },\n          summary: {\n            type: 'string'\n          }\n        },\n        required: [\n          'business_purpose_clear',\n          'business_relevance',\n          'reasonableness',\n          'category',\n          'risk_factors',\n          'positive_factors',\n          'recommended_action',\n          'confidence',\n          'summary'\n        ]\n      }\n    }\n  }\n}) }}",
+        "jsonBody": "={{\nJSON.stringify({\n  model: 'gpt-5',\n  store: false,\n\n  input: [\n\n    {\n      role: 'system',\n\n      content: [\n        {\n          type: 'input_text',\n\n          text: `\nYou are the contextual reasoning component of an employee expense auditing system.\n\nThe employee selected the expense category during submission.\n\nThe deterministic policy layer has already evaluated objective rules. Do not override those deterministic results.\n\nYour task is to assess whether the expense appears reasonable and relevant to the selected category.\n\nConsider:\n- employee-selected category\n- merchant\n- receipt line items\n- amount\n- location information visible on the receipt\n- deterministic policy flags\n- currency confidence\n\nDo not invent facts.\n\nDo not automatically reject unusual expenses.\n\nA flagged expense should normally require human review or additional information rather than automatic rejection.\n\nUse:\nNEEDS_EMPLOYEE_EXPLANATION when more context is reasonably required.\n\nUse:\nNEEDS_HUMAN_REVIEW when there is a serious concern, likely personal spending, unresolved policy issue, or the deterministic layer has explicitly required human review.\n\nUse:\nPASS when the expense appears reasonable and sufficiently supported.\n\nThe employee-selected category should be treated as the submitted category and should not be replaced with another category.\n`\n        }\n      ]\n    },\n\n    {\n      role: 'user',\n\n      content: [\n\n        {\n          type: 'input_text',\n\n          text:\n`Assess this expense:\n\n${JSON.stringify(\n  $json.audit_reasoning_input,\n  null,\n  2\n)}`\n        }\n      ]\n    }\n  ],\n\n  text: {\n\n    format: {\n\n      type: 'json_schema',\n\n      name: 'expense_contextual_audit',\n\n      strict: true,\n\n      schema: {\n\n        type: 'object',\n\n        additionalProperties: false,\n\n        properties: {\n\n          business_relevance: {\n            type: 'string',\n\n            enum: [\n              'CLEAR',\n              'PLAUSIBLE',\n              'UNCLEAR',\n              'LIKELY_PERSONAL'\n            ]\n          },\n\n          reasonableness: {\n            type: 'string',\n\n            enum: [\n              'REASONABLE',\n              'QUESTIONABLE',\n              'UNREASONABLE',\n              'INSUFFICIENT_INFORMATION'\n            ]\n          },\n\n          category_consistent: {\n            type: 'boolean'\n          },\n\n          risk_factors: {\n\n            type: 'array',\n\n            items: {\n              type: 'string'\n            }\n          },\n\n          positive_factors: {\n\n            type: 'array',\n\n            items: {\n              type: 'string'\n            }\n          },\n\n          recommended_action: {\n\n            type: 'string',\n\n            enum: [\n              'PASS',\n              'NEEDS_EMPLOYEE_EXPLANATION',\n              'NEEDS_HUMAN_REVIEW'\n            ]\n          },\n\n          confidence: {\n\n            type: 'number',\n\n            minimum: 0,\n\n            maximum: 1\n          },\n\n          summary: {\n\n            type: 'string'\n          }\n        },\n\n        required: [\n\n          'business_relevance',\n\n          'reasonableness',\n\n          'category_consistent',\n\n          'risk_factors',\n\n          'positive_factors',\n\n          'recommended_action',\n\n          'confidence',\n\n          'summary'\n        ]\n      }\n    }\n  }\n})\n}}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
       "position": [
-        2112,
-        3264
+        2304,
+        2720
       ],
-      "id": "6ef4a58d-4772-4029-a98c-9404ce6d4b0f",
-      "name": "AI Contextual Audit1",
+      "id": "22e9b57d-8809-40a2-9b59-20ce4961c1e4",
+      "name": "AI Contextual Audit2",
       "credentials": {
         "openAiApi": {
           "id": "2R0jsJVAPvxIn6D8",
@@ -1228,29 +1111,29 @@
     },
     {
       "parameters": {
-        "jsCode": "const response = $json;\n\nlet outputText = null;\n\n// OpenAI Responses API result\nif (Array.isArray(response.output)) {\n  for (const outputItem of response.output) {\n    if (!Array.isArray(outputItem.content)) {\n      continue;\n    }\n\n    for (const contentItem of outputItem.content) {\n      if (\n        contentItem.type === 'output_text' &&\n        typeof contentItem.text === 'string'\n      ) {\n        outputText = contentItem.text;\n        break;\n      }\n    }\n\n    if (outputText) {\n      break;\n    }\n  }\n}\n\n// Fallback if output_text exists directly\nif (!outputText && typeof response.output_text === 'string') {\n  outputText = response.output_text;\n}\n\nif (!outputText) {\n  throw new Error('OpenAI returned no audit result text.');\n}\n\nlet audit;\n\ntry {\n  audit = JSON.parse(outputText);\n} catch (error) {\n  throw new Error(\n    `Could not parse OpenAI audit JSON: ${error.message}`\n  );\n}\n\nreturn [\n  {\n    json: {\n      ...$json,\n      contextual_audit: audit\n    }\n  }\n];"
+        "jsCode": "const response = $json;\n\nlet outputText = null;\n\nif (\n  Array.isArray(response.output)\n) {\n\n  for (\n    const outputItem of\n    response.output\n  ) {\n\n    if (\n      !Array.isArray(\n        outputItem.content\n      )\n    ) {\n      continue;\n    }\n\n    for (\n      const contentItem of\n      outputItem.content\n    ) {\n\n      if (\n        contentItem.type ===\n          'output_text' &&\n        typeof contentItem.text ===\n          'string'\n      ) {\n\n        outputText =\n          contentItem.text;\n\n        break;\n      }\n    }\n\n    if (outputText) {\n      break;\n    }\n  }\n}\n\nif (\n  !outputText &&\n  typeof response.output_text ===\n    'string'\n) {\n  outputText =\n    response.output_text;\n}\n\nif (!outputText) {\n  throw new Error(\n    'OpenAI returned no contextual audit result.'\n  );\n}\n\nlet audit;\n\ntry {\n\n  audit =\n    JSON.parse(\n      outputText\n    );\n\n} catch (error) {\n\n  throw new Error(\n    `Could not parse contextual audit JSON: ${error.message}`\n  );\n}\n\nreturn [\n  {\n    json: {\n\n      ...$json,\n\n      contextual_audit:\n        audit\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2352,
-        3264
+        2544,
+        2720
       ],
-      "id": "b5ee0589-03bd-45ad-bf1c-5aa329062e3a",
-      "name": "Parse Audit Result1"
+      "id": "738598df-e6b5-47f1-b737-e78abd0826e5",
+      "name": "Parse Audit Result2"
     },
     {
       "parameters": {
-        "jsCode": "const policy = $json.policy_checks || {};\nconst audit = $json.contextual_audit || {};\n\nconst deterministicFlags = Array.isArray(policy.flags)\n  ? policy.flags\n  : [];\n\nconst riskFactors = Array.isArray(audit.risk_factors)\n  ? audit.risk_factors\n  : [];\n\nconst combinedFlags = [\n  ...new Set([\n    ...deterministicFlags,\n    ...riskFactors\n  ])\n];\n\nlet riskLevel = 'LOW';\nlet reviewRequired = false;\nlet employeeExplanationRequired = false;\n\n// HIGH RISK\nif (\n  policy.human_review_required === true ||\n  policy.approval?.cfo_approval_required === true ||\n  audit.recommended_action === 'NEEDS_HUMAN_REVIEW' ||\n  audit.business_relevance === 'LIKELY_PERSONAL' ||\n  audit.reasonableness === 'UNREASONABLE'\n) {\n  riskLevel = 'HIGH';\n  reviewRequired = true;\n} \n// MEDIUM RISK\nelse if (\n  audit.recommended_action === 'NEEDS_EMPLOYEE_EXPLANATION' ||\n  audit.business_relevance === 'UNCLEAR' ||\n  audit.reasonableness === 'QUESTIONABLE' ||\n  audit.reasonableness === 'INSUFFICIENT_INFORMATION' ||\n  Number(audit.confidence || 0) < 0.75\n) {\n  riskLevel = 'MEDIUM';\n  employeeExplanationRequired = true;\n}\n\nconst status =\n  riskLevel === 'HIGH'\n    ? 'NEEDS_HUMAN_REVIEW'\n    : riskLevel === 'MEDIUM'\n      ? 'NEEDS_EMPLOYEE_EXPLANATION'\n      : 'LOW_RISK';\n\nreturn [\n  {\n    json: {\n      ...$json,\n\n      final_audit_result: {\n        risk_level: riskLevel,\n        status,\n        review_required: reviewRequired,\n        employee_explanation_required:\n          employeeExplanationRequired,\n\n        deterministic_flags: deterministicFlags,\n        contextual_flags: riskFactors,\n        combined_flags: combinedFlags,\n\n        contextual_summary:\n          audit.summary || '',\n\n        category:\n          audit.category || 'OTHER',\n\n        confidence:\n          Number(audit.confidence || 0),\n\n        business_purpose_clear:\n          audit.business_purpose_clear ?? null,\n\n        business_relevance:\n          audit.business_relevance || '',\n\n        reasonableness:\n          audit.reasonableness || '',\n\n        recommended_action:\n          audit.recommended_action || ''\n      }\n    }\n  }\n];"
+        "jsCode": "const policy =\n  $json.policy_checks || {};\n\nconst audit =\n  $json.contextual_audit || {};\n\nconst deterministicFlags =\n  Array.isArray(policy.flags)\n    ? policy.flags\n    : [];\n\nconst contextualFlags =\n  Array.isArray(\n    audit.risk_factors\n  )\n    ? audit.risk_factors\n    : [];\n\nconst combinedFlags = [\n  ...new Set([\n    ...deterministicFlags,\n    ...contextualFlags\n  ])\n];\n\nlet riskLevel = 'LOW';\n\nlet reviewRequired = false;\n\nlet employeeExplanationRequired =\n  false;\n\n\n// HIGH\nif (\n\n  policy.human_review_required ===\n    true ||\n\n  audit.recommended_action ===\n    'NEEDS_HUMAN_REVIEW' ||\n\n  audit.business_relevance ===\n    'LIKELY_PERSONAL' ||\n\n  audit.reasonableness ===\n    'UNREASONABLE'\n\n) {\n\n  riskLevel = 'HIGH';\n\n  reviewRequired = true;\n\n}\n\n\n// MEDIUM\nelse if (\n\n  audit.recommended_action ===\n    'NEEDS_EMPLOYEE_EXPLANATION' ||\n\n  audit.business_relevance ===\n    'UNCLEAR' ||\n\n  audit.reasonableness ===\n    'QUESTIONABLE' ||\n\n  audit.reasonableness ===\n    'INSUFFICIENT_INFORMATION' ||\n\n  Number(\n    audit.confidence || 0\n  ) < 0.75\n\n) {\n\n  riskLevel = 'MEDIUM';\n\n  employeeExplanationRequired =\n    true;\n\n}\n\n\nconst status =\n\n  riskLevel === 'HIGH'\n\n    ? 'NEEDS_HUMAN_REVIEW'\n\n    : riskLevel === 'MEDIUM'\n\n      ? 'NEEDS_EMPLOYEE_EXPLANATION'\n\n      : 'LOW_RISK';\n\n\nreturn [\n  {\n    json: {\n\n      ...$json,\n\n      final_audit_result: {\n\n        risk_level:\n          riskLevel,\n\n        status,\n\n        review_required:\n          reviewRequired,\n\n        employee_explanation_required:\n          employeeExplanationRequired,\n\n        deterministic_flags:\n          deterministicFlags,\n\n        contextual_flags:\n          contextualFlags,\n\n        combined_flags:\n          combinedFlags,\n\n        contextual_summary:\n          audit.summary || '',\n\n        confidence:\n          Number(\n            audit.confidence || 0\n          ),\n\n        category_consistent:\n          audit.category_consistent ??\n          true,\n\n        business_relevance:\n          audit.business_relevance ||\n          '',\n\n        reasonableness:\n          audit.reasonableness ||\n          '',\n\n        recommended_action:\n          audit.recommended_action ||\n          ''\n      }\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2592,
-        3264
+        2784,
+        2720
       ],
-      "id": "729322f8-97b8-4535-b84f-a1210dbe7ffb",
-      "name": "Final Risk Assessment1"
+      "id": "1f8c3d18-c5ff-4fb7-af84-5cc5a0516b1f",
+      "name": "Final Risk Assessment2"
     },
     {
       "parameters": {
@@ -1279,37 +1162,31 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        2832,
-        3264
+        3024,
+        2720
       ],
-      "id": "0b8e45c3-522e-4887-904c-8c5d7e7897a9",
-      "name": "High Risk?1"
+      "id": "e3b40102-2ab3-4222-90c9-eced68e6f4c5",
+      "name": "High Risk?2"
     },
     {
       "parameters": {
-        "select": "channel",
-        "channelId": {
+        "select": "user",
+        "user": {
           "__rl": true,
-          "mode": "id",
-          "value": "={{ $('Slack Trigger1').item.json.channel }}"
+          "value": "={{ $('Parse Expense Submission').item.json.submitter_id }}",
+          "mode": "id"
         },
-        "text": "=🚨 *Expense needs review*\\n\\n*Merchant:* {{ $json.audit_engine_input.receipt.merchant }}\\n*Amount:* {{ $json.audit_engine_input.receipt.currency }}{{ $json.audit_engine_input.receipt.total.toFixed(2) }}\\n*Risk:* HIGH\\n\\n*Reason:* {{ $json.final_audit_result.contextual_summary }}\\n\\n*Flags:* {{ $json.final_audit_result.combined_flags.join(', ') }}\\n\\nThis expense has not been automatically rejected. It requires human review.",
-        "otherOptions": {
-          "thread_ts": {
-            "replyValues": {
-              "thread_ts": "={{ $('Slack Trigger1').item.json.ts }}"
-            }
-          }
-        }
+        "text": "={{\n'🚨 *Your expense has been flagged for review*\\n\\n' +\n'*Category:* ' +\n$('Prepare High-Risk Sheet Row').item.json.category +\n'\\n*Merchant:* ' +\n$('Prepare High-Risk Sheet Row').item.json.merchant +\n'\\n*Amount:* ' +\n$('Prepare High-Risk Sheet Row').item.json.currency +\n$('Prepare High-Risk Sheet Row').item.json.total_amount.toFixed(2) +\n'\\n\\n*Reason:*\\n' +\n$('Final Risk Assessment2').item.json.final_audit_result.contextual_summary +\n'\\n\\n*Risk level:* HIGH\\n\\n' +\n'Your expense has *not* been automatically rejected. It has been flagged because it requires additional review. You will be contacted if any further information is required.'\n}}",
+        "otherOptions": {}
       },
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
       "position": [
-        3008,
-        3152
+        3680,
+        2592
       ],
-      "id": "cd79d46c-881a-4575-8013-a57cf3cefe64",
-      "name": "High-Risk Expense Slack Routing1",
+      "id": "f6c20a4f-8de6-4f3d-9d3a-86c06b1d47cd",
+      "name": "High-Risk Expense Slack Routing2",
       "webhookId": "59b44d7f-f8fc-431f-8970-3de9961dd7dc",
       "credentials": {
         "slackApi": {
@@ -1345,25 +1222,25 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        2976,
-        3360
+        3152,
+        2944
       ],
-      "id": "0592d828-3bd3-4359-bf3e-b663b3260ef4",
-      "name": "Medium Risk?1"
+      "id": "87de89ae-352c-4b94-8f53-bd0eea43e2ab",
+      "name": "Medium Risk?2"
     },
     {
       "parameters": {
         "select": "channel",
         "channelId": {
           "__rl": true,
-          "mode": "id",
-          "value": "={{ $('Slack Trigger1').item.json.channel }}"
+          "value": "=={{ $('Parse Expense Submission').item.json.submitter_id }}",
+          "mode": "id"
         },
-        "text": "={{ \n'*Quick explanation needed for your expense*\\n\\n' +\n'*Merchant:* ' + $('Audit Engine Input1').item.json.audit_engine_input.receipt.merchant +\n'\\n*Amount:* ' + $('Audit Engine Input1').item.json.audit_engine_input.receipt.currency +\n$('Audit Engine Input1').item.json.audit_engine_input.receipt.total.toFixed(2) +\n'\\n\\n' +\n$('Final Risk Assessment1').item.json.final_audit_result.contextual_summary +\n'\\n\\nPlease reply in this thread with a short explanation of how this expense helped you do your job. Your expense has *not* been rejected.'\n}}",
+        "text": "={{ \n'*Quick explanation needed for your expense*\\n\\n' +\n'*Merchant:* ' + $('Audit Engine Input2').item.json.audit_engine_input.receipt.merchant +\n'\\n*Amount:* ' + $('Audit Engine Input2').item.json.audit_engine_input.receipt.currency +\n$('Audit Engine Input2').item.json.audit_engine_input.receipt.total.toFixed(2) +\n'\\n\\n' +\n$('Final Risk Assessment2').item.json.final_audit_result.contextual_summary +\n'\\n\\nPlease reply in this thread with a short explanation of how this expense helped you do your job. Your expense has *not* been rejected.'\n}}",
         "otherOptions": {
           "thread_ts": {
             "replyValues": {
-              "thread_ts": "={{ $('Slack Trigger1').item.json.ts }}"
+              "thread_ts": "=={{ $('Parse Expense Submission').item.json.submitter_id }}"
             }
           }
         }
@@ -1371,11 +1248,11 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
       "position": [
-        3216,
-        3280
+        3392,
+        2864
       ],
-      "id": "6d0b5968-3693-4795-918a-dd33a1d916e4",
-      "name": "Request Employee Explanation1",
+      "id": "0231524b-65ae-4dd9-b848-21d7b0bb827d",
+      "name": "Request Employee Explanation2",
       "webhookId": "9e40a27e-605a-43a8-b619-5d1af7fbcd65",
       "credentials": {
         "slackApi": {
@@ -1389,14 +1266,14 @@
         "select": "channel",
         "channelId": {
           "__rl": true,
-          "mode": "id",
-          "value": "={{ $('Slack Trigger1').item.json.channel }}"
+          "value": "=={{ $('Parse Expense Submission').item.json.submitter_id }}",
+          "mode": "id"
         },
         "text": "=✅ *Expense passed initial compliance checks*\\n\\n*Merchant:* {{ $json.audit_engine_input.receipt.merchant }}\\n*Amount:* {{ $json.audit_engine_input.receipt.currency }}{{ $json.audit_engine_input.receipt.total.toFixed(2) }}\\n\\n{{ $json.final_audit_result.contextual_summary }}\\n\\nNo immediate compliance issue was identified. The expense can continue through the normal audit process.",
         "otherOptions": {
           "thread_ts": {
             "replyValues": {
-              "thread_ts": "={{ $('Slack Trigger1').item.json.ts }}"
+              "thread_ts": "=={{ $('Parse Expense Submission').item.json.submitter_id }}"
             }
           }
         }
@@ -1404,11 +1281,11 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.4,
       "position": [
-        3216,
-        3488
+        3392,
+        3072
       ],
-      "id": "edbd1b14-f959-40ea-8d83-1345e6457c04",
-      "name": "Low Risk Compliance Feedback1",
+      "id": "efb19f83-797a-43e9-89e7-8477197b53dc",
+      "name": "Low Risk Compliance Feedback2",
       "webhookId": "ad52b67a-875d-428c-a92d-cbca61a49c51",
       "credentials": {
         "slackApi": {
@@ -1419,48 +1296,56 @@
     },
     {
       "parameters": {
-        "jsCode": "const audit = $json.final_audit_result || {};\nconst input = $json.audit_engine_input || {};\nconst receipt = input.receipt || {};\n\nreturn [\n  {\n    json: {\n      expense_id: input.expense_id || receipt.receipt_id || '',\n      submitter_id: input.submitted_by || '',\n      channel_id: input.channel_id || $('Slack Trigger').item.json.channel || '',\n      message_ts: input.message_ts || $('Slack Trigger').item.json.ts || '',\n\n      merchant: receipt.merchant || '',\n      transaction_date: receipt.transaction_date || '',\n      currency: receipt.currency || '',\n      total: Number(receipt.total || 0),\n\n      category: audit.category || 'OTHER',\n      risk_level: audit.risk_level || '',\n      status: audit.status || '',\n      confidence: Number(audit.confidence || 0),\n\n      flags: JSON.stringify(audit.combined_flags || []),\n      audit_summary: audit.contextual_summary || '',\n\n      employee_explanation: '',\n      human_decision: ''\n    }\n  }\n];"
+        "jsCode": "const auditInput =\n  $('Audit Engine Input2').item.json.audit_engine_input || {};\n\nconst receipt =\n  auditInput.receipt || {};\n\nconst submission =\n  auditInput.submission || {};\n\nconst now =\n  new Date().toISOString();\n\nconst lineItems =\n  Array.isArray(receipt.line_items)\n    ? receipt.line_items\n    : [];\n\nreturn [\n  {\n    json: {\n      receipt_id: '=ROW()-1',\n\n      receipt_date:\n        receipt.transaction_date || '',\n\n      merchant:\n        receipt.merchant || '',\n\n      line_items:\n        JSON.stringify(lineItems),\n\n      total_amount:\n        Number(receipt.total || 0),\n\n      tax:\n        Number(receipt.tax || 0),\n\n      category:\n        submission.category_label ||\n        submission.category ||\n        '',\n\n      currency:\n        receipt.currency || '',\n\n      submitter:\n        auditInput.submitted_by || '',\n\n      raw_file_reference:\n        receipt.receipt_id ||\n        '',\n\n      status:\n        'pending',\n\n      created_at:\n        now,\n\n      updated_at:\n        now\n    }\n  }\n];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2560,
-        1952
+        3232,
+        2592
       ],
-      "id": "c51585ee-057b-4da9-947e-b1016316a34c",
-      "name": "Prepare Expense Record"
+      "id": "31907971-8aa4-4a8b-80f7-14d03c4b9078",
+      "name": "Prepare High-Risk Sheet Row"
     },
     {
       "parameters": {
-        "dataTableId": {
+        "operation": "append",
+        "documentId": {
           "__rl": true,
-          "mode": "name",
-          "value": "expense_audit_records"
+          "value": "1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE",
+          "mode": "list",
+          "cachedResultName": "Expense Data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Receipts",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE/edit#gid=0"
         },
         "columns": {
           "mappingMode": "defineBelow",
           "value": {
-            "expense_id": "={{ $json.expense_id }}",
-            "submitter_id": "={{ $json.submitter_id }}",
-            "channel_id": "={{ $json.channel_id }}",
-            "message_ts": "={{ $json.message_ts }}",
+            "receipt_id": "={{ $json.receipt_id }}",
+            "receipt_date": "={{ $json.receipt_date }}",
             "merchant": "={{ $json.merchant }}",
-            "transaction_date": "={{ $json.transaction_date }}",
-            "currency": "={{ $json.currency }}",
-            "total": "={{ $json.total }}",
+            "line_items": "={{ $json.line_items }}",
+            "total_amount": "={{ $json.total_amount }}",
+            "tax": "={{ $json.tax }}",
             "category": "={{ $json.category }}",
-            "risk_level": "={{ $json.risk_level }}",
+            "currency": "={{ $json.currency }}",
+            "submitter": "={{ $json.submitter }}",
+            "raw_file_reference": "={{ $json.raw_file_reference }}",
             "status": "={{ $json.status }}",
-            "confidence": "={{ $json.confidence }}",
-            "flags": "={{ $json.flags }}",
-            "audit_summary": "={{ $json.audit_summary }}",
-            "employee_explanation": "={{ $json.employee_explanation }}",
-            "human_decision": "={{ $json.human_decision }}"
+            "created_at": "={{ $json.created_at }}",
+            "updated_at": "={{ $json.updated_at }}"
           },
+          "matchingColumns": [],
           "schema": [
             {
-              "id": "expense_id",
-              "displayName": "expense_id",
+              "id": "receipt_id",
+              "displayName": "receipt_id",
               "required": false,
               "defaultMatch": false,
               "display": true,
@@ -1468,31 +1353,13 @@
               "canBeUsedToMatch": true
             },
             {
-              "id": "submitter_id",
-              "displayName": "submitter_id",
+              "id": "receipt_date",
+              "displayName": "receipt_date",
               "required": false,
               "defaultMatch": false,
               "display": true,
               "type": "string",
-              "canBeUsedToMatch": false
-            },
-            {
-              "id": "channel_id",
-              "displayName": "channel_id",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": false
-            },
-            {
-              "id": "message_ts",
-              "displayName": "message_ts",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": false
+              "canBeUsedToMatch": true
             },
             {
               "id": "merchant",
@@ -1501,34 +1368,34 @@
               "defaultMatch": false,
               "display": true,
               "type": "string",
-              "canBeUsedToMatch": false
+              "canBeUsedToMatch": true
             },
             {
-              "id": "transaction_date",
-              "displayName": "transaction_date",
+              "id": "line_items",
+              "displayName": "line_items",
               "required": false,
               "defaultMatch": false,
               "display": true,
               "type": "string",
-              "canBeUsedToMatch": false
+              "canBeUsedToMatch": true
             },
             {
-              "id": "currency",
-              "displayName": "currency",
+              "id": "total_amount",
+              "displayName": "total_amount",
               "required": false,
               "defaultMatch": false,
               "display": true,
               "type": "string",
-              "canBeUsedToMatch": false
+              "canBeUsedToMatch": true
             },
             {
-              "id": "total",
-              "displayName": "total",
+              "id": "tax",
+              "displayName": "tax",
               "required": false,
               "defaultMatch": false,
               "display": true,
-              "type": "number",
-              "canBeUsedToMatch": false
+              "type": "string",
+              "canBeUsedToMatch": true
             },
             {
               "id": "category",
@@ -1537,16 +1404,34 @@
               "defaultMatch": false,
               "display": true,
               "type": "string",
-              "canBeUsedToMatch": false
+              "canBeUsedToMatch": true
             },
             {
-              "id": "risk_level",
-              "displayName": "risk_level",
+              "id": "currency",
+              "displayName": "currency",
               "required": false,
               "defaultMatch": false,
               "display": true,
               "type": "string",
-              "canBeUsedToMatch": false
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "submitter",
+              "displayName": "submitter",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "raw_file_reference",
+              "displayName": "raw_file_reference",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
             },
             {
               "id": "status",
@@ -1555,65 +1440,46 @@
               "defaultMatch": false,
               "display": true,
               "type": "string",
-              "canBeUsedToMatch": false
+              "canBeUsedToMatch": true
             },
             {
-              "id": "confidence",
-              "displayName": "confidence",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "number",
-              "canBeUsedToMatch": false
-            },
-            {
-              "id": "flags",
-              "displayName": "flags",
+              "id": "created_at",
+              "displayName": "created_at",
               "required": false,
               "defaultMatch": false,
               "display": true,
               "type": "string",
-              "canBeUsedToMatch": false
+              "canBeUsedToMatch": true
             },
             {
-              "id": "audit_summary",
-              "displayName": "audit_summary",
+              "id": "updated_at",
+              "displayName": "updated_at",
               "required": false,
               "defaultMatch": false,
               "display": true,
               "type": "string",
-              "canBeUsedToMatch": false
-            },
-            {
-              "id": "employee_explanation",
-              "displayName": "employee_explanation",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": false
-            },
-            {
-              "id": "human_decision",
-              "displayName": "human_decision",
-              "required": false,
-              "defaultMatch": false,
-              "display": true,
-              "type": "string",
-              "canBeUsedToMatch": false
+              "canBeUsedToMatch": true
             }
-          ]
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
         },
         "options": {}
       },
-      "type": "n8n-nodes-base.dataTable",
-      "typeVersion": 1.1,
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
       "position": [
-        2800,
-        1952
+        3456,
+        2592
       ],
-      "id": "acb3852f-dfca-4c31-bbe4-12e774367e91",
-      "name": "Store Expense Record"
+      "id": "1388b440-f262-4484-be16-29fdd6c02718",
+      "name": "Append High-Risk Expense",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ZSq43xodQKZeVUm6",
+          "name": "c25-farah-google-sheets"
+        }
+      }
     }
   ],
   "pinData": {},
@@ -1884,277 +1750,301 @@
         ]
       ]
     },
-    "Slack Trigger1": {
+    "Expense Slash Command": {
       "main": [
         [
           {
-            "node": "Receipt File?1",
+            "node": "Build Expense Modal1",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Receipt File?1": {
+    "Expense Modal Submission": {
       "main": [
         [
           {
-            "node": "Receipt Acknowledgement1",
+            "node": "Parse Expense Submission",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Receipt Acknowledgement1": {
+    "Parse Expense Submission": {
       "main": [
         [
           {
-            "node": "Extract Receipt Metadata1",
+            "node": "Respond to Modal Submission",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Normalise Expense Submission",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Extract Receipt Metadata1": {
+    "Normalise Expense Submission": {
       "main": [
         [
           {
-            "node": "Receipt File Present?1",
+            "node": "Get Receipt File Info",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Receipt File Present?1": {
+    "Get Receipt File Info": {
       "main": [
         [
           {
-            "node": "Supported Receipt Type?1",
+            "node": "Prepare Receipt Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Receipt Download": {
+      "main": [
+        [
+          {
+            "node": "Download Modal Receipt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Expense Modal1": {
+      "main": [
+        [
+          {
+            "node": "Open Expense Modal1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Open Expense Modal1": {
+      "main": [
+        [
+          {
+            "node": "Respond to Slash Command",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Vision Input2": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Vision OCR2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse OCR Result2": {
+      "main": [
+        [
+          {
+            "node": "Extraction Quality Check2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraction Quality Check2": {
+      "main": [
+        [
+          {
+            "node": "Extraction Valid?2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extraction Valid?2": {
+      "main": [
+        [
+          {
+            "node": "Build Audit Payload2",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "No Receipt Provided1",
+            "node": "Receipt Needs Review2",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Supported Receipt Type?1": {
+    "OpenAI Vision OCR2": {
       "main": [
         [
           {
-            "node": "Download Receipt1",
+            "node": "Parse OCR Result2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Audit Payload2": {
+      "main": [
+        [
+          {
+            "node": "Deterministic Policy Checks2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deterministic Policy Checks2": {
+      "main": [
+        [
+          {
+            "node": "Audit Engine Input2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit Engine Input2": {
+      "main": [
+        [
+          {
+            "node": "Prepare Audit Context2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Audit Context2": {
+      "main": [
+        [
+          {
+            "node": "AI Contextual Audit2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Contextual Audit2": {
+      "main": [
+        [
+          {
+            "node": "Parse Audit Result2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Audit Result2": {
+      "main": [
+        [
+          {
+            "node": "Final Risk Assessment2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Final Risk Assessment2": {
+      "main": [
+        [
+          {
+            "node": "High Risk?2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "High Risk?2": {
+      "main": [
+        [
+          {
+            "node": "Prepare High-Risk Sheet Row",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Unsupported File1",
+            "node": "Medium Risk?2",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Download Receipt1": {
+    "Medium Risk?2": {
       "main": [
         [
           {
-            "node": "Prepare Vision Input1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Prepare Vision Input1": {
-      "main": [
-        [
-          {
-            "node": "OpenAI Vision OCR1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parse OCR Result1": {
-      "main": [
-        [
-          {
-            "node": "Extraction Quality Check1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Extraction Quality Check1": {
-      "main": [
-        [
-          {
-            "node": "Extraction Valid?1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Extraction Valid?1": {
-      "main": [
-        [
-          {
-            "node": "Build Audit Payload1",
+            "node": "Request Employee Explanation2",
             "type": "main",
             "index": 0
           }
         ],
         [
           {
-            "node": "Receipt Needs Review1",
+            "node": "Low Risk Compliance Feedback2",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "OpenAI Vision OCR1": {
+    "Download Modal Receipt": {
       "main": [
         [
           {
-            "node": "Parse OCR Result1",
+            "node": "Prepare Vision Input2",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Build Audit Payload1": {
+    "Prepare High-Risk Sheet Row": {
       "main": [
         [
           {
-            "node": "Deterministic Policy Checks1",
+            "node": "Append High-Risk Expense",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Deterministic Policy Checks1": {
+    "Append High-Risk Expense": {
       "main": [
         [
           {
-            "node": "Audit Engine Input1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Audit Engine Input1": {
-      "main": [
-        [
-          {
-            "node": "Prepare Audit Context1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Prepare Audit Context1": {
-      "main": [
-        [
-          {
-            "node": "AI Contextual Audit1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AI Contextual Audit1": {
-      "main": [
-        [
-          {
-            "node": "Parse Audit Result1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Parse Audit Result1": {
-      "main": [
-        [
-          {
-            "node": "Final Risk Assessment1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Final Risk Assessment1": {
-      "main": [
-        [
-          {
-            "node": "High Risk?1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "High Risk?1": {
-      "main": [
-        [
-          {
-            "node": "High-Risk Expense Slack Routing1",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Medium Risk?1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Medium Risk?1": {
-      "main": [
-        [
-          {
-            "node": "Request Employee Explanation1",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
-            "node": "Low Risk Compliance Feedback1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Prepare Expense Record": {
-      "main": [
-        [
-          {
-            "node": "Store Expense Record",
+            "node": "High-Risk Expense Slack Routing2",
             "type": "main",
             "index": 0
           }
@@ -2167,7 +2057,7 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "7b565a65-75f2-47d0-9038-5098c2a90c43",
+  "versionId": "18c48fdf-54b5-4c5c-8066-c4986ef5fa23",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "0b3178866478233b39ccab85cc4a6c6bdfb86963810969ae561a567c52042c3a"
