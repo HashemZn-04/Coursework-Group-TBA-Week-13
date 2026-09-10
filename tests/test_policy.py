@@ -75,5 +75,5 @@ def test_every_category_the_llm_can_return_is_either_capped_or_explicitly_uncapp
 def test_every_limit_cites_its_source_and_base_period():
     for name, limit in policy.CATEGORY_LIMITS.items():
         assert limit.source, name
-        assert limit.base_period.endswith("-01"), name  # FRED wants a month start
+        assert limit.base_period.endswith("-01"), name  # stored as a month start
         assert limit.basis in {"per_claim", "per_head", "per_day", "per_month"}, name

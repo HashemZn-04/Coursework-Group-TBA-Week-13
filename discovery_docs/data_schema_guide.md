@@ -27,4 +27,11 @@ Your step-by-step for defining the shared receipt schema today.
 | `total` | decimal | |
 | `currency` | string | ISO 4217 code |
 | `raw_file_ref` | string | pointer/URL to the original image or PDF |
-| `status` | string | `pending_review` \| `compliant` \| `flagged` \| `high_risk` |
+| `status` | string | `pending_review` \| `approved` \| `rejected` |
+| `verdict` | string | `low_risk` \| `high_risk` — the risk assignment outcome, set at processing time |
+| `verdict_reason` | string | free-text reasoning behind the verdict |
+| `decided_at` | ISO 8601 datetime | blank until the CFO acts on a `high_risk` receipt |
+
+Note: the live Google Sheet is now a single Receipts table — there is no
+separate Verdicts/Decisions tab. `verdict`, `verdict_reason` and `decided_at`
+are columns on the same row as everything else above.

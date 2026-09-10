@@ -2,6 +2,24 @@
 C4 — Contextual Validation, inflation-aware (MCP-27), plus the verdict mapping
 C3/C5 share.
 
+Where this sits in the pipeline. Every receipt runs the same three stages, in
+this order, and comes out one of exactly two ways:
+
+    1. Deterministic policy checks   hard limits, approval thresholds, the
+                                     one-month cutoff (n8n's "Deterministic
+                                     Policy Checks" node)
+    2. Contextual validation (C4)    the receipt against its category limit,
+                                     re-priced to today's CPI — this module
+    3. Final risk assessment         combine both with the governance prompt's
+                                     contextual read, and split:
+
+           low_risk   -> approved automatically, nobody looks at it
+           high_risk  -> the CFO's review queue
+
+There is no third outcome and no "assessed but parked" state. A receipt holding
+neither verdict has not been through the pipeline at all — that is a failure to
+process it, not a classification, and the dashboard reports it as one.
+
 The problem this solves is the brief's "Policy Decay": Amara's handbook was
 written in 2019 and its numbers have not moved since, so a receipt can be over
 the written limit while being an entirely normal 2026 price. Comparing against
@@ -27,10 +45,19 @@ team's existing OpenAI credential there. This module deliberately holds no LLM
 call: it is the deterministic, testable, reproducible half, and it produces the
 same answer for the same receipt every time — which is what makes it auditable.
 
-CPI comes from FRED (ticket C2 names FRED or BLS). C2 — AA's scheduled pull —
-is not built yet, so `cpi_for()` calls FRED directly and caches per process,
-which stands in for the cron job. When C2 lands, point `cpi_for` at the
-Benchmarks tab; nothing else in this module changes.
+Inflation comes from one global series — the World Bank's world aggregate for
+annual consumer-price inflation — rather than a per-country index. Meridian's
+limits are a single firm-wide set of figures, so re-pricing them needs exactly
+one inflation number; and a receipt from Berlin, Boston or Bristol is measured
+against the same firm limit either way. One source, no per-country routing, and
+no API key.
+
+The honest cost of that choice: the global series is **annual and published in
+arrears** (latest is 2025, where a national index like the UK's runs monthly to
+2026-07). So the adjustment is a year-granular figure that lags the present by
+roughly a year, and it always under-states rather than over-states the
+re-pricing. Every result carries the years it actually used, so this is visible
+rather than assumed.
 """
 
 import os
@@ -40,122 +67,144 @@ import requests
 from dotenv import load_dotenv
 
 try:  # importable both as `api.audit` and as a sibling of `app.py`
-    from api.policy import (APPROVAL_THRESHOLDS, REPORTING_CURRENCY, Limit,
-                            limit_for, normalise_category)
+    from api.policy import (APPROVAL_THRESHOLDS, REPORTING_CURRENCY,
+                            VERDICT_HIGH, VERDICT_LOW, Limit, limit_for,
+                            normalise_category)
     from api.summary import format_money
 except ImportError:  # pragma: no cover - exercised only by `python api/app.py`
-    from policy import (APPROVAL_THRESHOLDS, REPORTING_CURRENCY, Limit,
-                        limit_for, normalise_category)
+    from policy import (APPROVAL_THRESHOLDS, REPORTING_CURRENCY, VERDICT_HIGH,
+                        VERDICT_LOW, Limit, limit_for, normalise_category)
     from summary import format_money
 
 load_dotenv()
 
-FRED_URL = "https://api.stlouisfed.org/fred/series/observations"
-FRED_TIMEOUT = 10
-
-#: US all-items CPI. Overridable, but note the UK alternative on FRED
-#: (GBRCPIALLMINMEI) stops in early 2025 and so cannot answer a 2026 question.
-CPI_SERIES_ID = os.environ.get("CPI_SERIES_ID", "CPIAUCSL")
-
-#: Observations captured 2026-09-09 so a demo without network or without a
-#: FRED_API_KEY still produces a defensible number instead of a stack trace.
-#: Every result says which source it used, so a fallback is never silent.
-CPI_FALLBACK: dict[str, tuple[str, float]] = {
-    "latest": ("2026-07-01", 332.813),
-    "2019-03-01": ("2019-03-01", 254.277),
-    "2020-04-01": ("2020-04-01", 256.032),
-    "2022-01-01": ("2022-01-01", 282.543),
-}
-
-RISK_TO_VERDICT = {"HIGH": "high_risk", "MEDIUM": "flagged", "LOW": "compliant"}
-VERDICT_TO_RISK = {v: k for k, v in RISK_TO_VERDICT.items()}
+#: n8n still computes three risk levels, because it uses them to pick between
+#: three different Slack replies. We store two verdicts. MEDIUM — the workflow's
+#: "needs an explanation from the employee" tier — maps to `high_risk`: it is by
+#: definition not something the engine is confident enough to auto-approve.
+RISK_TO_VERDICT = {"HIGH": VERDICT_HIGH, "MEDIUM": VERDICT_HIGH,
+                   "LOW": VERDICT_LOW}
 
 
 def map_verdict(risk_level: str) -> str:
-    """n8n's risk level -> the verdict vocabulary stored in the Verdicts tab."""
-    return RISK_TO_VERDICT.get(str(risk_level).strip().upper(), "compliant")
+    """n8n's risk level -> the verdict vocabulary stored on the Receipts row.
+
+    An unrecognised risk level resolves to `high_risk`, not `low_risk`. `low_risk`
+    now carries an automatic approval, so the safe direction for an unknown
+    value is towards a human, not past one.
+    """
+    return RISK_TO_VERDICT.get(str(risk_level).strip().upper(), VERDICT_HIGH)
 
 
 # --------------------------------------------------------------------------- #
-# CPI lookup (stands in for C2's scheduled pull until AA builds it)
+# Global inflation (stands in for C2's scheduled pull until AA builds it)
 # --------------------------------------------------------------------------- #
 
-def _fred_observations(params: dict) -> list[dict]:
-    api_key = os.environ.get("FRED_API_KEY")
-    if not api_key:
-        raise RuntimeError("FRED_API_KEY is not set")
-    response = requests.get(
-        FRED_URL,
-        params={"series_id": CPI_SERIES_ID, "api_key": api_key,
-                "file_type": "json", **params},
-        timeout=FRED_TIMEOUT,
-    )
-    response.raise_for_status()
-    return response.json().get("observations", [])
+#: World Bank: world aggregate, "Inflation, consumer prices (annual %)".
+#: Free, no key, no signup.
+WORLD_BANK_URL = ("https://api.worldbank.org/v2/country/WLD/"
+                  "indicator/FP.CPI.TOTL.ZG")
+WORLD_BANK_TIMEOUT = 15
+CPI_SERIES_ID = "WLD.FP.CPI.TOTL.ZG"
+
+#: Published global annual inflation, %, captured from the World Bank
+#: 2026-09-09. Used when the API cannot be reached so a demo still produces a
+#: defensible number; every result says which source it came from.
+#: Full published precision, not rounded — a 2dp copy drifts about a penny per
+#: £100 of limit against the live figures, which would make the offline demo and
+#: the live one disagree for no reason anyone could explain.
+GLOBAL_INFLATION_FALLBACK: dict[int, float] = {
+    2015: 1.43702380935655, 2016: 1.59691227583204, 2017: 2.22314331448899,
+    2018: 2.44258329692817, 2019: 2.20607305781525, 2020: 1.90509722047501,
+    2021: 3.47540320289875, 2022: 8.08169507021982, 2023: 5.79944107391962,
+    2024: 3.01447576977999, 2025: 3.0414132155654,
+}
 
 
-def _first_valid(observations: list[dict]) -> tuple[str, float]:
-    """FRED writes missing observations as ".", so skip to the first real one."""
-    for observation in observations:
-        try:
-            return observation["date"], float(observation["value"])
-        except (KeyError, TypeError, ValueError):
-            continue
-    raise ValueError("no usable CPI observation in FRED response")
+@lru_cache(maxsize=1)
+def global_inflation_rates() -> tuple[dict[int, float], str]:
+    """``({year: annual inflation %}, source)`` for the world aggregate.
+
+    Cached for the life of the process — the series only gains a value once a
+    year, and C2's scheduled pull will eventually front this.
+    """
+    try:
+        response = requests.get(
+            WORLD_BANK_URL, params={"format": "json", "per_page": 200},
+            timeout=WORLD_BANK_TIMEOUT)
+        response.raise_for_status()
+        rows = response.json()[1]
+        rates = {int(row["date"]): float(row["value"])
+                 for row in rows if row.get("value") is not None}
+        if not rates:
+            raise ValueError("world aggregate returned no observations")
+        return rates, "worldbank"
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError):
+        return dict(GLOBAL_INFLATION_FALLBACK), "fallback"
+
+
+def _price_index(rates: dict[int, float]) -> tuple[dict[int, float], float]:
+    """Chain annual rates into price levels, anchored at 100.
+
+    The World Bank publishes a rate per year for the world aggregate, not an
+    index, so the levels we compare are compounded from those rates. Returns the
+    level at the *start* of each year, plus the level reached at the *end* of the
+    last published year.
+
+    Start-of-year for the base is the deliberate choice: the handbook was issued
+    in March 2019, so nearly all of 2019's own inflation applies to it. Measuring
+    from the end of 2019 would silently drop a year of it.
+    """
+    index, level = {}, 100.0
+    for year in sorted(rates):
+        index[year] = level
+        level *= 1 + rates[year] / 100
+    return index, level
+
+
+def _year_of(period: str | int) -> int:
+    return int(str(period)[:4])
 
 
 @lru_cache(maxsize=32)
-def cpi_for(period: str | None = None) -> tuple[str, float, str]:
-    """CPI index level for a month, as ``(observation_date, value, source)``.
+def cpi_for(period: str | int | None = None) -> tuple[str, float, str]:
+    """Price level for a year, as ``(year, index_level, source)``.
 
-    `period` is a FRED observation date (month start, e.g. ``"2019-03-01"``);
-    None means "the most recent published observation". A month with no
-    published figure falls forward to the next available one within a quarter,
-    which matters for base periods near the end of the series.
+    `period` is anything starting with a year (``"2019-03-01"`` or ``2019``),
+    giving the level at the start of that year. None gives the level at the end
+    of the latest published year — labelled with that year, so the reported
+    vintage is the last year we actually have data for and never a year we do
+    not.
 
-    `source` is ``"fred"`` for a live call or ``"fallback"`` for the pinned
-    snapshot above — callers surface it so a cached number is never mistaken for
-    a live one.
+    Because the global series is annual, the month in a base period is ignored:
+    a limit set in March 2019 and one set in November 2019 re-price identically.
     """
-    try:
-        if period is None:
-            date, value = _first_valid(
-                _fred_observations({"sort_order": "desc", "limit": 1}))
-        else:
-            end = _quarter_end(period)
-            date, value = _first_valid(_fred_observations(
-                {"observation_start": period, "observation_end": end}))
-        return date, value, "fred"
-    except (requests.RequestException, RuntimeError, ValueError, KeyError):
-        date, value = CPI_FALLBACK.get(period or "latest", CPI_FALLBACK["latest"])
-        return date, value, "fallback"
-
-
-def _quarter_end(period: str) -> str:
-    """Three months after `period`, so a missing month can fall forward."""
-    year, month, _ = (int(part) for part in period.split("-"))
-    month += 3
-    year, month = year + (month - 1) // 12, (month - 1) % 12 + 1
-    return f"{year:04d}-{month:02d}-01"
+    rates, source = global_inflation_rates()
+    index, end_level = _price_index(rates)
+    last_year = max(rates)
+    if period is None:
+        return str(last_year), round(end_level, 4), source
+    year = min(max(_year_of(period), min(index)), last_year)  # clamp to series
+    return str(year), round(index[year], 4), source
 
 
 def latest_cpi() -> float:
-    """Most recent CPI index level. Kept as the simple form used in the guide."""
+    """Most recent global price level on the chained index."""
     return cpi_for(None)[1]
 
 
 def inflation_factor(base_period: str) -> tuple[float, dict]:
-    """How much prices have moved since `base_period`, plus the CPI provenance."""
-    base_date, base_value, base_source = cpi_for(base_period)
-    latest_date, latest_value, latest_source = cpi_for(None)
+    """How much global prices have moved since `base_period`, plus provenance."""
+    base_year, base_value, base_source = cpi_for(base_period)
+    latest_year, latest_value, latest_source = cpi_for(None)
     provenance = {
         "series_id": CPI_SERIES_ID,
-        "base_period": base_date,
+        "base_period": base_year,
         "base_value": base_value,
-        "latest_period": latest_date,
+        "latest_period": latest_year,
         "latest_value": latest_value,
-        # "fred" only when *both* lookups were live.
-        "source": "fred" if base_source == latest_source == "fred" else "fallback",
+        "source": ("worldbank" if base_source == latest_source == "worldbank"
+                   else "fallback"),
     }
     return latest_value / base_value, provenance
 
@@ -224,7 +273,8 @@ def contextual_validation(total: float, category: str, units: int = 1,
     else:
         assessment = "POLICY_VIOLATION" if limit.hard else "OVER_GUIDELINE"
 
-    unconverted = bool(currency) and str(currency).upper() != REPORTING_CURRENCY
+    unconverted = bool(currency) and str(
+        currency).upper() != REPORTING_CURRENCY
     return {
         "category": category,
         "assessment": assessment,
@@ -300,15 +350,17 @@ def final_verdict(policy_checks: dict, contextual_audit: dict,
                   validation: dict | None = None) -> tuple[str, str, list[str]]:
     """Combine the deterministic, LLM and inflation layers into one verdict.
 
-    Returns ``(verdict, risk_level, flags)``. This deliberately reproduces the
+    Returns ``(verdict, risk_level, flags)``, where verdict is `low_risk` or
+    `high_risk` and risk_level keeps n8n's three-value vocabulary so its Slack
+    routing still has the distinction it needs. This deliberately reproduces the
     logic in n8n's "Final Risk Assessment" node rather than replacing it: n8n
     normally sends its own `risk_level` and `/api/audit` trusts it, so this is
     the path taken when a caller posts a raw contextual audit with no risk level
     — and it is the executable spec QA (C7) can check the n8n node against.
 
     C4's outcome is folded in here rather than becoming a fourth verdict value:
-    the Verdicts tab only ever holds compliant / flagged / high_risk, and
-    "good deal" or "policy violation" is reasoning that belongs in `reason`.
+    the Receipts row only ever holds `low_risk` or `high_risk`, and "good deal"
+    or "policy violation" is reasoning that belongs in `verdict_reason`.
     """
     policy_checks = policy_checks or {}
     contextual_audit = contextual_audit or {}
@@ -333,10 +385,11 @@ def final_verdict(policy_checks: dict, contextual_audit: dict,
         or assessment == "POLICY_VIOLATION"
     )
     if high_risk:
-        return "high_risk", "HIGH", flags
+        return VERDICT_HIGH, "HIGH", flags
 
     medium_risk = (
-        contextual_audit.get("recommended_action") == "NEEDS_EMPLOYEE_EXPLANATION"
+        contextual_audit.get(
+            "recommended_action") == "NEEDS_EMPLOYEE_EXPLANATION"
         or contextual_audit.get("business_relevance") == "UNCLEAR"
         or contextual_audit.get("reasonableness") in ("QUESTIONABLE",
                                                       "INSUFFICIENT_INFORMATION")
@@ -344,6 +397,6 @@ def final_verdict(policy_checks: dict, contextual_audit: dict,
         or assessment == "OVER_GUIDELINE"
     )
     if medium_risk:
-        return "flagged", "MEDIUM", flags
+        return VERDICT_HIGH, "MEDIUM", flags
 
-    return "compliant", "LOW", flags
+    return VERDICT_LOW, "LOW", flags

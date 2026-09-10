@@ -24,22 +24,79 @@ Two provenance notes worth keeping straight:
   price ceilings. They live here for traceability; n8n's "Deterministic Policy
   Checks" node is what actually enforces them.
 
-Currency caveat, stated plainly rather than papered over: the handbook is written
-in GBP, while the CPI series C4 defaults to (`CPIAUCSL`) is the US index. It is
-used as the inflation proxy because it is the only series in FRED that is current
-through 2026 — the OECD UK series (`GBRCPIALLMINMEI`) stops in early 2025, which
-would defeat the "2026 economic data" requirement in the brief. Set
-`CPI_SERIES_ID` in the environment to override.
+These limits are GBP, and they are re-priced against a single global inflation
+series rather than a per-country one (see `api.audit`). That is deliberate and
+worth being able to defend: what gets re-priced is Meridian's own firm-wide
+limit, not the local price of the thing bought, so one inflation number is the
+right shape for the problem — a £75-a-head limit is £75 a head whether the
+dinner was in Berlin or Bristol. It also means no per-country routing and no API
+key. The cost is that the global series is annual and roughly a year in arrears;
+`api.audit` documents that in full.
 """
 
 from dataclasses import dataclass
 
 REPORTING_CURRENCY = "GBP"
 
+# --------------------------------------------------------------------------- #
+# Verdict vocabulary
+# --------------------------------------------------------------------------- #
+# Two outcomes, not three. `low_risk` is auto-approved by the engine and never
+# reaches a human; `high_risk` is the review queue. The middle tier ("flagged",
+# needing an employee explanation) was removed on 2026-09-09 — an expense either
+# clears on its own or it needs Amara.
+#
+# The consequence worth being deliberate about: anything the engine is not
+# confident about must land in `high_risk`, because `low_risk` now carries an
+# automatic approval rather than merely an absence of concern. n8n still emits
+# three risk levels to drive its three Slack messages, and MEDIUM maps to
+# `high_risk` for exactly that reason.
+#
+# There is no separate Decisions tab any more: `status` on the Receipts row
+# itself (`pending_review` -> `approved`/`rejected`) is the decision outcome,
+# so nothing here attributes a decision to anyone.
+
+VERDICT_LOW = "low_risk"
+VERDICT_HIGH = "high_risk"
+VERDICTS = (VERDICT_LOW, VERDICT_HIGH)
+
+#: Rows written before the three-tier model was collapsed, plus rows written
+#: under the old two-tier vocabulary (`low`). `flagged` folds up rather than
+#: down, matching the MEDIUM rule above: it always meant "a human needs to look
+#: at this", and there is no longer anywhere else for that to go.
+LEGACY_VERDICTS = {
+    "compliant": VERDICT_LOW,
+    "flagged": VERDICT_HIGH,
+    "low": VERDICT_LOW,
+}
+
+
+def normalise_verdict(value: str | None) -> str | None:
+    """Map any stored verdict onto the current two-value vocabulary.
+
+    Returns None only for an empty/absent verdict, which is not a third
+    outcome: the pipeline terminates in `low` or `high_risk` for every receipt
+    it processes. A missing verdict means the receipt never completed the
+    pipeline — a processing failure to surface and fix, never something to
+    quietly resolve into either bucket. Guessing `low` would approve an expense
+    nothing ever assessed; guessing `high_risk` would put unassessed noise in
+    front of the only approver in the company.
+    """
+    if value is None:
+        return None
+    key = str(value).strip().lower()
+    if not key:
+        return None
+    if key in VERDICTS:
+        return key
+    return LEGACY_VERDICTS.get(key, key)
+
+
 #: Addendum B's cost-of-living uplift, applied January 2022.
 ADDENDUM_B_UPLIFT = 1.15
 
-#: Period a figure was last set in, as a FRED observation date (month start).
+#: Period a figure was last set in. Stored as a month start for readability;
+#: only the year is used, since the global inflation series is annual.
 HANDBOOK_ISSUE = "2019-03-01"
 ADDENDUM_A_ISSUE = "2020-04-01"
 ADDENDUM_B_ISSUE = "2022-01-01"
@@ -93,7 +150,8 @@ CATEGORY_LIMITS: dict[str, Limit] = {
     ),
     "STAFF_ENTERTAINMENT": Limit(
         category="STAFF_ENTERTAINMENT",
-        amount=round(40 * ADDENDUM_B_UPLIFT, 2),  # £40/head routine social, +15%
+        # £40/head routine social, +15%
+        amount=round(40 * ADDENDUM_B_UPLIFT, 2),
         basis="per_head",
         base_period=ADDENDUM_B_ISSUE,
         source="Handbook 6.2 (routine team social, per head), uplifted 15% by Addendum B",

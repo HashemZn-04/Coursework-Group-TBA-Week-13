@@ -34,7 +34,8 @@ def test_c5_acceptance_criterion_summary_contains_what_why_amount_and_who():
     assert "Needs your decision" in summary          # the ask
     assert "CFO approval threshold" in summary       # why (deterministic)
     assert "more than a month after" in summary      # why (deterministic)
-    assert "Client dinner for three" in summary      # why (the LLM's reasoning)
+    # why (the LLM's reasoning)
+    assert "Client dinner for three" in summary
     assert "Good deal" in summary                    # why (C4)
 
 
@@ -50,17 +51,14 @@ def test_slack_and_dashboard_renderings_carry_the_same_facts():
     assert result["slack_message"].startswith("*Needs your decision*")
 
 
-def test_compliant_receipt_says_so_rather_than_going_silent():
-    result = build_summary(RECEIPT, "compliant", flags=[], submitter="U04ALEX")
-    assert result["headline"] == "No action needed"
-    assert "Passed every policy check" in result["summary"]
-
-
-def test_flagged_receipt_asks_the_employee_not_the_cfo():
-    result = build_summary(RECEIPT, "flagged", flags=["UNCLEAR_RECEIPT_FIELDS"],
-                           submitter="U04ALEX")
-    assert result["headline"] == "Needs an explanation from the employee"
-    assert "could not be read" in result["summary"]
+def test_low_risk_receipt_says_it_was_approved_not_merely_unremarkable():
+    """`low_risk` now carries an automatic approval, so the wording has to say
+    that happened — "no action needed" would understate what the system just
+    did."""
+    result = build_summary(RECEIPT, "low_risk", flags=[], submitter="U04ALEX")
+    assert result["headline"] == "Auto-approved"
+    assert "approved automatically" in result["summary"]
+    assert "No human review was required" in result["summary"]
 
 
 def test_llm_risk_factors_pass_through_verbatim():
@@ -82,7 +80,7 @@ def test_duplicate_and_empty_flags_are_dropped():
 def test_no_limit_validation_detail_is_not_padded_into_the_reasons():
     """"The handbook sets no numeric limit for travel" is true but says nothing
     a reviewer needs, so it stays out of the summary."""
-    result = build_summary({**RECEIPT, "category": "TRAVEL"}, "flagged",
+    result = build_summary({**RECEIPT, "category": "TRAVEL"}, "high_risk",
                            flags=["UNCLEAR_RECEIPT_FIELDS"],
                            validation={"assessment": "NO_LIMIT",
                                        "detail": "The handbook sets no numeric limit"})

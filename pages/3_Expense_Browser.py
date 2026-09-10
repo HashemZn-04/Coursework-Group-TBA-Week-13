@@ -12,34 +12,68 @@ if df.empty:
             "Receipts tab: https://docs.google.com/spreadsheets/d/1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE")
     st.stop()
 
+# A receipt whose date could not be read cannot take part in a date-range
+# filter, and quietly dropping it is exactly the failure Amara described being
+# burned by before — a tool that looks like it worked while losing your data.
+# So they are held aside and reported, not discarded.
+dated = df[df["date"].notna()]
+undated = df[df["date"].isna()]
+
 col1, col2, col3 = st.columns(3)
-date_range = col1.date_input(
-    "Date range", value=(df["date"].min(), df["date"].max())
-)
+if dated.empty:
+    date_range = ()
+    col1.warning("No readable dates")
+else:
+    date_range = col1.date_input(
+        "Date range", value=(dated["date"].min(), dated["date"].max())
+    )
 categories = col2.multiselect(
     "Category", options=sorted(df["category"].dropna().unique()), default=None
 )
 submitters = col3.multiselect(
     "Submitter", options=sorted(df["submitter"].dropna().unique()), default=None
 )
-min_amount, max_amount = st.slider(
-    "Amount range",
-    float(df["total"].min()), float(df["total"].max()),
-    (float(df["total"].min()), float(df["total"].max())),
-)
 
-filtered = df[
-    (df["date"] >= pd.Timestamp(date_range[0]))
-    & (df["date"] <= pd.Timestamp(date_range[1]))
-    & (df["total"] >= min_amount)
-    & (df["total"] <= max_amount)
-]
+amounts = df["total"].dropna()
+if amounts.empty or amounts.min() == amounts.max():
+    min_amount, max_amount = float("-inf"), float("inf")
+else:
+    min_amount, max_amount = st.slider(
+        "Amount range",
+        float(amounts.min()), float(amounts.max()),
+        (float(amounts.min()), float(amounts.max())),
+    )
+
+filtered = df[(df["total"] >= min_amount) & (df["total"] <= max_amount)]
+
+# st.date_input hands back a 1-tuple while the user is mid-selection (first
+# click registered, second not yet), so both ends have to be present before the
+# range is applied — indexing [1] unconditionally raises.
+if len(date_range) == 2:
+    filtered = filtered[filtered["date"].notna()
+                        & (filtered["date"] >= pd.Timestamp(date_range[0]))
+                        & (filtered["date"] <= pd.Timestamp(date_range[1]))]
 if categories:
     filtered = filtered[filtered["category"].isin(categories)]
 if submitters:
     filtered = filtered[filtered["submitter"].isin(submitters)]
 
+st.caption(f"Showing {len(filtered)} of {len(df)} receipts.")
+
 st.dataframe(
     filtered[["receipt_id", "date", "merchant", "category", "submitter", "total", "verdict", "status"]],
     use_container_width=True,
 )
+
+if not undated.empty:
+    with st.expander(f"{len(undated)} receipt(s) with an unreadable date "
+                     f"— excluded from the date filter"):
+        st.caption(
+            "The date on these could not be parsed, so they cannot be placed on "
+            "a timeline. Fix `receipt_date` in the Receipts tab to bring them in."
+        )
+        st.dataframe(
+            undated[["receipt_id", "receipt_date", "merchant", "category",
+                     "submitter", "total", "verdict", "status"]],
+            use_container_width=True,
+        )

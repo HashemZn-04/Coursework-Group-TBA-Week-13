@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """C4 (MCP-27) acceptance evidence — the constructed example, run live.
 
-    python scripts/c4_demo.py                       # in-process, live FRED call
+    python scripts/c4_demo.py                       # in-process, live World Bank call
     python scripts/c4_demo.py --api http://localhost:5000
                                                     # through the running API,
                                                     # printing request/response
@@ -9,9 +9,9 @@
 The acceptance criterion asks for "a receipt priced above a static old limit but
 within current inflation-adjusted benchmark [...] correctly classified as
 acceptable (and vice versa) — demonstrated with at least one constructed
-example". This runs five, prints what CPI figures were used and where they came
-from, and exits non-zero if any of them classifies wrongly — so it is evidence
-when it passes and a failing check when it does not.
+example". This runs five, prints which inflation figures were used and where
+they came from, and exits non-zero if any of them classifies wrongly — so it is
+evidence when it passes and a failing check when it does not.
 
 Paste the output into the C4 Jira ticket. It is the artifact.
 """
@@ -91,9 +91,9 @@ def main():
               f"£{result['unit_amount']:,.2f} {result['basis']}")
         print(f"       {result['detail']}")
         cpi = result["cpi"]
-        print(f"       CPI {cpi['series_id']}: {cpi['base_value']} "
-              f"({cpi['base_period'][:7]}) -> {cpi['latest_value']} "
-              f"({cpi['latest_period'][:7]}), source: {cpi['source']}")
+        print(f"       {cpi['series_id']}: {cpi['base_value']} "
+              f"({cpi['base_period']}) -> {cpi['latest_value']} "
+              f"({cpi['latest_period']}), source: {cpi['source']}")
         print()
 
     if failures:
@@ -102,9 +102,12 @@ def main():
         return 1
 
     print("All examples classified as expected.")
-    print("\nNote: a 'fallback' CPI source above means FRED could not be reached "
-          "and the pinned 2026-09-09 snapshot was used. Set FRED_API_KEY in .env "
-          "for a live figure before capturing this as evidence.")
+    print("\nInflation source: the World Bank's world aggregate for annual "
+          "consumer-price inflation — one global series, no API key, applied to "
+          "receipts from anywhere. A 'fallback' source above means the API could "
+          "not be reached and the pinned 2026-09-09 snapshot was used.")
+    print("The series is annual and published in arrears, so the latest period "
+          "above is the most recent full year, not the current month.")
     return 0
 
 

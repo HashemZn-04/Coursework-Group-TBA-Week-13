@@ -12,8 +12,9 @@ sentence that mostly assembles facts we already hold.
 
 Two renderings come out of one call:
 
-* `summary` — plain prose, stored in the Verdicts tab's `reason` column and
-  shown in the Streamlit Review Queue. This is the dashboard half of the ticket.
+* `summary` — plain prose, stored in the Receipts row's `verdict_reason` column
+  and shown in the Streamlit Review Queue. This is the dashboard half of the
+  ticket.
 * `slack_message` — the same content in Slack mrkdwn, returned by `/api/audit`
   so n8n's Slack node can post it verbatim instead of re-formatting it. This is
   the Slack half.
@@ -21,6 +22,11 @@ Two renderings come out of one call:
 Keeping both in one place is the point: the message Amara reads in Slack and the
 one she reads in the dashboard are the same sentence, from the same source.
 """
+
+try:  # importable both as `api.summary` and as a sibling of `app.py`
+    from api.policy import VERDICT_HIGH, VERDICT_LOW
+except ImportError:  # pragma: no cover - exercised only by `python api/app.py`
+    from policy import VERDICT_HIGH, VERDICT_LOW
 
 CURRENCY_SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
 
@@ -45,10 +51,12 @@ FLAG_DESCRIPTIONS = {
         "over the category's guideline figure once adjusted for inflation",
 }
 
+#: Two outcomes. `low` is stated as an approval rather than as an absence of
+#: concern, because that is now what it does — the engine has approved it and
+#: nobody else will look at it.
 VERDICT_HEADLINES = {
-    "high_risk": "Needs your decision",
-    "flagged": "Needs an explanation from the employee",
-    "compliant": "No action needed",
+    VERDICT_HIGH: "Needs your decision",
+    VERDICT_LOW: "Auto-approved",
 }
 
 
@@ -97,8 +105,10 @@ def build_summary(receipt: dict, verdict: str, flags=None,
     currency = receipt.get("currency")
     money = format_money(receipt.get("total"), currency)
     date = str(receipt.get("transaction_date") or "date not read").strip()
-    category = str(receipt.get("category") or "uncategorised").replace("_", " ").lower()
-    who = str(submitter or receipt.get("submitter") or "unknown submitter").strip()
+    category = str(receipt.get("category")
+                   or "uncategorised").replace("_", " ").lower()
+    who = str(submitter or receipt.get("submitter")
+              or "unknown submitter").strip()
     headline = VERDICT_HEADLINES.get(verdict, "Needs review")
 
     reasons = describe_flags(flags)
@@ -113,12 +123,13 @@ def build_summary(receipt: dict, verdict: str, flags=None,
     if contextual_summary and str(contextual_summary).strip():
         body.append(str(contextual_summary).strip())
     if reasons:
-        if verdict == "compliant":
+        if verdict == VERDICT_LOW:
             body.append("Notes: " + _join(reasons) + ".")
         else:
             body.append("Flagged because it is " + _join(reasons) + ".")
-    elif verdict == "compliant":
-        body.append("Passed every policy check with nothing outstanding.")
+    elif verdict == VERDICT_LOW:
+        body.append("Passed every policy check and was approved automatically. "
+                    "No human review was required.")
 
     summary = " ".join([lead, *body])
 
@@ -126,7 +137,8 @@ def build_summary(receipt: dict, verdict: str, flags=None,
                    f"> {category} · {who} · {date}"]
     if contextual_summary and str(contextual_summary).strip():
         slack_lines.append(str(contextual_summary).strip())
-    slack_lines.extend(f"• {reason[0].upper()}{reason[1:]}" for reason in reasons)
+    slack_lines.extend(
+        f"• {reason[0].upper()}{reason[1:]}" for reason in reasons)
 
     return {
         "headline": headline,

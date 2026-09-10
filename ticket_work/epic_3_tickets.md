@@ -9,8 +9,8 @@
 
 1. **C1 is done** — schema now lives as the 3 sheet tabs below instead of 3 Postgres tables. Same fields, same intent.
 2. **C3's real blocker (A3 Governance Prompt) doesn't exist as a finished artifact yet.** AA already built a working draft directly inside the n8n workflow — a generic "contextual reasonableness" system prompt plus two hardcoded rules (£2,000 CFO threshold, £250 line-manager threshold, 1-month cutoff). Real, usable v1 — just not the full handbook ruleset. Build on it rather than wait.
-3. **C2 (CPI pull) hasn't been built at all** — no cron node, no CPI/FRED/BLS reference anywhere in n8n. It technically blocks C4; C4 now calls FRED directly and caches per process, and writes every observation it uses to a **Benchmarks** tab, which is both the workaround and the schema C2 should write into when AA builds it.
-4. **AA's n8n workflow calls OpenAI directly** from the "AI Contextual Audit" node — not a DA-owned API. An orphaned "Store Expense Record" node pair is wired to nothing, so nothing persists anywhere right now. Revised plan (see C3, 2026-09-09): rather than repoint that node, DA supplies the real governance-prompt content for it and n8n forwards its finished result to a new Flask persistence endpoint — closes the same gap without needing DA to hold an OpenAI key.
+3. **C2 (CPI pull) hasn't been built at all** — no cron node, no CPI reference anywhere in n8n. It technically blocks C4; `scripts/sync_cpi.py` stands in by writing the World Bank's global series to a **CPI** tab that n8n's agent reads, which is both the workaround and the exact job C2 should automate on a schedule.
+4. **AA's n8n workflow calls OpenAI directly** from the "AI Contextual Audit" node — not a DA-owned API. That stays as it is: the team's OpenAI credential lives in n8n, DA has no key, and there is nowhere to host a Flask app anyway. DA's job on C3 is therefore the *content* of that node's prompt plus the persistence schema, not the LLM call. Partial persistence now exists (one branch of one path); what is still missing, and why it matters, is in the C3 section below.
 
 Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 is AA's, C7 is Mason's.)
 
@@ -26,7 +26,7 @@ Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 
 | C5 routing + summary | DA half done — summary generation, `/api/audit` response, Review Queue rendering | C3's persistence gap, then an end-to-end Slack run |
 | C6 query API | Done — filters, pagination, `status` widening, audit-trail endpoint | — |
 
-`pytest -q` — 88 tests, no credentials or network needed. Everything below marked
+`pytest -q` — 100 tests, no credentials or network needed. Everything below marked
 "done" is covered by them.
 
 ---
@@ -188,29 +188,184 @@ Jira mapping: C1=MCP-21 (done), C3=MCP-25, C4=MCP-27, C5=MCP-31, C6=MCP-34. (C2 
 
 ## C3 — Policy Match against Governance Prompt (MCP-25)
 
-> **2026-09-09 revision (2nd) — AA already added a Sheets append node, but it doesn't close C3 yet.** AA replaced the workflow export with a new file, `discovery_docs/Expense - High Risk Google Sheets Append.json` (the old `Expense Intelligence - Receipt Intake.json` is gone). It's a bigger change than "add one node": AA added a whole new **manual-entry submission path** (a Slack slash-command → modal form → re-runs OCR/audit under new "2"-suffixed nodes) alongside the original file-upload path, and wired a Google Sheets "Append" node into that new path's high-risk branch only. Checked it node-by-node before writing anything further here — don't treat it as done, it has real gaps:
->
-> - **The original Slack file-upload path — the one B1/B4/B6 actually describe, and presumably the main demo path — still has zero persistence.** Its own "High Risk?" node goes straight to a Slack message, same dead end as before. The new Sheets node only fires from the *new* modal-entry path.
-> - **Only HIGH-risk modal submissions get saved.** Medium/low-risk ones aren't persisted at all — which breaks C6/E2/E5 (they need *every* receipt, not just the flagged ones).
-> - **No verdict is ever written anywhere.** The Sheets node only appends to **Receipts** (13 columns match our schema exactly, good) — there's no matching write to **Verdicts**. So even the one case that does get saved won't show up in Review Queue, since that page filters on `verdict.isin(['flagged','high_risk'])` and no verdict row will exist for it.
-> - **`receipt_id` is set to the literal string `'=ROW()-1'`** in the upstream "Prepare High-Risk Sheet Row" code node — not a real generated ID. Sheets will very likely store this as inert text, not evaluate it as a formula, meaning every row from this path gets the *same* non-numeric `receipt_id`. (I've made `_next_id()` in both `dashboard/data.py` and `api/sheets.py` tolerant of this — it now skips unparseable IDs instead of crashing — but the underlying value is still wrong/non-unique.)
-> - **Column swap:** that same code node puts the expense's real original ID into `raw_file_reference` instead of `receipt_id`, and hardcodes `status` to `'pending'` (our schema/dashboard use `'pending_review'`).
->
-> None of this is something I can fix from the Python/docs side — it needs a decision and a fix in the n8n workflow itself. What follows is the governance-prompt content (still correct and usable as-is) plus a concrete punch list to hand to AA. I have not assumed this is fixed in the steps below — I've marked exactly what still blocks C3 being genuinely done.
+**Dependencies:** A3's rule content (worked around — AA's existing n8n system prompt was extended rather than waited on, see step 1). Then AA closing the persistence gaps below.
+**Can start now:** the prompt content and the Python side — both done. **The actual "every ingested receipt receives a stored policy verdict" criterion: no, blocked on the n8n fixes below.**
+**Software:** n8n web UI, `gspread`. No OpenAI SDK or key needed in Python — the LLM call stays in n8n, where the team's credential already lives.
 
-**Dependencies:** A3 content (workaround: reuse/extend AA's existing n8n system prompt — done, see step 1). AA fixing the persistence gaps above, or DA/AA agreeing on who does. **Can start now:** the prompt content and Python side, yes. **The actual "every receipt gets a stored verdict" acceptance criterion: no, blocked on the n8n fixes below.**
-**Software:** `gspread`, n8n web UI (no OpenAI SDK/key needed in Python — see the earlier revision above for why).
+### Step 1 — paste the governance prompt into n8n (DA task, not yet done)
 
-1. `api/governance_prompt.py` — done. `SYSTEM_PROMPT` starts from AA's existing "AI Contextual Audit" node prompt and extends it with the concrete rules Amara actually confirmed (CFO threshold $2,000, line-manager band $250–$2,000,
-1-month cutoff no exceptions, the reasonableness test, non-listed-software sign-off, foreign-currency purchasing power, split-receipting). Sync with PM before calling this final — it's technically A3 content. Paste it into the "AI Contextual Audit" node's `jsonBody` → `input[0].content[0].text` (plain text inside the existing backtick template literal — the prompt has no backticks or `${...}` in it, so it's safe to paste with real line breaks).
-2. Send AA this punch list:
-   - **Run on both branches, all risk tiers.** Move the Sheets append upstream of the High/Medium/Low check (or replicate it on the original file-upload branch too) — right now only high-risk modal submissions get saved.
-   - **Fix `receipt_id`:** before "Prepare High-Risk Sheet Row", add a Google Sheets **Get Row(s)** node reading the Receipts tab. In "Prepare High-Risk Sheet Row", replace `'=ROW()-1'` with the highest existing `receipt_id` from that Get Row(s) output plus one (falling back to 1 if the sheet's empty), instead of a hardcoded formula string.
-   - **Fix the swap:** `raw_file_reference` = the actual file reference; `receipt_id` = the computed value above (not the reverse).
-   - **Fix status:** `'pending'` → `'pending_review'`.
-   - **Add a Verdicts append** (Google Sheets, Append, sheet = Verdicts) right after the Receipts append: `verdict_id` = any unique value, `receipt_id` = the same id just written, `verdict` = `{{ {HIGH:'high_risk', MEDIUM:'flagged', LOW:'compliant'}[$json.final_audit_result.risk_level] }}`, `reason` = `{{ $json.final_audit_result.contextual_summary }}`, `created_at` = `{{ $now.toISO() }}`.
-3. Once AA applies those fixes (or you do, if you have edit access — same instructions apply either way), test with a real Slack upload of a receipt image (the original path, not the slash-command/modal one) and confirm a row lands in **both** Receipts and Verdicts, with a real numeric `receipt_id` shared between them, `status = pending_review`, and `raw_file_reference` pointing at the actual file.
-4. Done once that's true for all three risk tiers, not just high-risk — that's what actually satisfies "every ingested receipt receives a stored policy verdict."
+`api/governance_prompt.py`'s `SYSTEM_PROMPT` is written and ready. It starts from
+AA's existing "AI Contextual Audit" node prompt and extends it with the rules
+Amara actually confirmed: the $2,000 CFO threshold, the $250 line-manager band,
+the one-month cutoff with no exceptions, the reasonableness test, non-listed
+software needing manager + IT sign-off, foreign-currency purchasing power, and
+the split-receipting caveat.
+
+Paste it into the "AI Contextual Audit" node's `jsonBody` →
+`input[0].content[0].text`, replacing the text inside the existing backtick
+template literal. The prompt contains no backticks and no `${...}`, so it is safe
+to paste with real line breaks. Do this on **both** copies of the node — the
+unsuffixed one and "AI Contextual Audit2" — or the two paths will judge the same
+receipt by different rules.
+
+Sync with Alex before calling this final: it is technically A3 content, drafted
+here so C3 wasn't stalled waiting on it.
+
+### Step 2 — for AA: what's wrong, why it matters, and a prompt to fix it
+
+AA replaced the workflow export with `discovery_docs/Expense - High Risk Google Sheets Append.json`
+and added a Google Sheets "Append" node. That was real progress, but C3 is not
+closed yet. Checked node-by-node against the live sheet on 2026-09-09.
+
+**The one-line version for AA:** five of the six receipts in the sheet right now
+have no verdict stored anywhere, so the CFO's Review Queue is empty and the
+approve/reject demo has nothing to act on. The fix is entirely inside the n8n
+workflow.
+
+#### What's wrong, and what each one actually breaks
+
+| # | What the workflow does now | Why that breaks something |
+|---|---|---|
+| 1 | The Sheets append is wired **only into the modal/slash-command path** ("2"-suffixed nodes). The original Slack **file-upload** path ends at a Slack message. | The file-upload path is the one B1/B4/B6 describe and the one we demo. Every receipt submitted the normal way is currently **thrown away** after the Slack reply. |
+| 2 | The append sits on the **high-risk branch only** (`High Risk?2` → true). | Medium and low risk receipts are never saved. The dashboard's spend totals, category breakdown and "all approved expenses queryable" (C6) need *every* receipt. This matters more now that low risk is auto-approved: an auto-approved receipt that was never written down is an approval with no record of it at all. |
+| 3 | **Nothing is ever written to the Verdicts tab.** Only Receipts is appended to. | This is the one that empties the Review Queue. That page filters on `verdict = 'high_risk'`, and the verdict lives in the Verdicts tab. No verdict row = the receipt is invisible to the CFO, no matter how risky it was. It also means C3's own acceptance criterion — "every ingested receipt receives a stored policy verdict" — is unmet by definition. |
+| 4 | `receipt_id` is set to the string `'=ROW()-1'` in "Prepare High-Risk Sheet Row". | Confirmed on the live sheet: Sheets **evaluates** this as a formula, so the IDs *look* right (3, 4, 5, 6…). The problem is they are **positional, not stable**. Delete, insert or sort a row and every ID below it silently changes — while the Verdicts and Decisions rows keep pointing at the old numbers. The audit trail then attributes decisions to the wrong receipts, with no error anywhere. C1's whole acceptance criterion is "for any receipt, reconstruct what was submitted, what the AI decided, and what the human did" — a renumbering ID makes that impossible to trust. |
+| 5 | `status` is hardcoded to `'pending'`. | The schema and every dashboard filter use `'pending_review'`. `'pending'` matches nothing, so those rows fall out of the status filters. |
+
+Not a bug, checked and cleared: the 13 Receipts columns map correctly, and
+`category` populates fine (`Audit Engine Input2` includes `submission`, unlike its
+twin on the other path).
+
+#### The prompt to give an LLM
+
+AA can paste this straight into whatever assistant they use, along with the
+workflow JSON export. It is written to be self-contained — it does not assume the
+assistant has seen this repo.
+
+---
+
+```
+I have an n8n workflow that processes employee expense receipts. I'm attaching
+the workflow JSON export. I need you to make five changes to it. Please give me
+the exact node configuration and code for each, and tell me precisely where each
+node goes in the flow.
+
+CONTEXT — how the workflow works today:
+
+There are two submission paths that both do the same thing:
+  - Path A (original): "Slack Trigger" -> OCR -> "Deterministic Policy Checks"
+    -> "AI Contextual Audit" -> "Final Risk Assessment" -> "High Risk?" ->
+    "Medium Risk?" -> Slack replies. Node names have NO suffix.
+  - Path B (newer): a Slack slash-command opens a modal, then runs the same
+    chain. Node names all end in "2" (e.g. "Final Risk Assessment2").
+
+Both paths end with a node called "Final Risk Assessment" / "Final Risk
+Assessment2" that outputs an object at $json.final_audit_result containing:
+  risk_level          -> one of 'HIGH', 'MEDIUM', 'LOW'
+  contextual_summary  -> a plain-English sentence explaining the decision
+  category            -> e.g. 'CLIENT_ENTERTAINMENT', 'SUBSISTENCE'
+
+Receipt fields live at:
+  $('Audit Engine Input2').item.json.audit_engine_input.receipt
+which has: merchant, transaction_date, currency, total, tax, line_items (array),
+receipt_id (this is the SLACK FILE ID, not a database id).
+And .audit_engine_input.submitted_by is the Slack user id.
+
+Today, ONLY Path B's high-risk branch writes anything: "High Risk?2" (true
+output) -> "Prepare High-Risk Sheet Row" (a Code node) -> "Append High-Risk
+Expense" (a Google Sheets append to the "Receipts" tab).
+
+THE TARGET — a Google Sheet with ID
+1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE and three tabs.
+
+Tab "Receipts", columns in this exact order:
+  receipt_id, receipt_date, merchant, line_items, total_amount, tax, category,
+  currency, submitter, raw_file_reference, status, created_at, updated_at
+
+Tab "Verdicts", columns in this exact order:
+  verdict_id, receipt_id, verdict, reason, created_at
+
+Tab "Decisions" is written by a separate dashboard app — do not touch it.
+
+THE FIVE CHANGES:
+
+1. PERSIST EVERY RECEIPT, NOT JUST HIGH-RISK ONES.
+   Move the persistence so it runs for all three risk levels. The cleanest way
+   is to put it immediately AFTER "Final Risk Assessment2" and BEFORE "High
+   Risk?2", so it runs once for every receipt regardless of which branch fires
+   afterwards. Keep the existing Slack routing behaviour unchanged.
+
+2. DO THE SAME ON THE OTHER PATH.
+   Path A (the original Slack file-upload path, unsuffixed node names) currently
+   persists nothing. Add the same persistence chain after "Final Risk
+   Assessment" and before "High Risk?". It must read from the unsuffixed nodes
+   ("Audit Engine Input", not "Audit Engine Input2"). This is the path we demo,
+   so it matters most.
+
+3. GENERATE A STABLE receipt_id.
+   The Code node currently sets receipt_id to the string '=ROW()-1'. Google
+   Sheets evaluates that as a live formula, so the ids renumber themselves
+   whenever a row is inserted, deleted or sorted — which silently corrupts the
+   link between a receipt and its verdict. Replace it:
+   - Add a Google Sheets "Get Row(s)" node reading the "Receipts" tab, placed
+     before the Code node.
+   - In the Code node, compute: the highest numeric receipt_id in those rows,
+     plus 1. If the sheet has no data rows, use 1. Ignore any row whose
+     receipt_id is not a number.
+   - Use that computed number as receipt_id. It must be a plain number, never a
+     formula string.
+
+4. FIX TWO FIELD VALUES in the Code node ("Prepare High-Risk Sheet Row"):
+   - status: it is currently hardcoded to 'pending'. It must now depend on the
+     risk level, because a low-risk expense is approved automatically:
+         risk_level LOW              -> 'approved'
+         risk_level HIGH or MEDIUM   -> 'pending_review'
+     (exact strings - downstream filters match on them).
+   - raw_file_reference: set it to the Slack file id (receipt.receipt_id).
+     receipt_id must be the number computed in change 3, NOT the Slack file id.
+
+5. ADD A VERDICTS ROW — this is the most important change.
+   Right after the Receipts append succeeds, add a second Google Sheets append
+   node writing to the "Verdicts" tab, with:
+     verdict_id  = any unique number (same max+1 approach as receipt_id is fine)
+     receipt_id  = the SAME number just written to Receipts (they must match —
+                   this is the join between the two tabs)
+     verdict     = map final_audit_result.risk_level:
+                     HIGH   -> 'high_risk'
+                     MEDIUM -> 'high_risk'
+                     LOW    -> 'low'
+                   (lowercase; there are only these two verdict values)
+     reason      = final_audit_result.contextual_summary
+     created_at  = current timestamp in ISO 8601
+   Without this row the receipt never appears in the CFO's review dashboard,
+   because that dashboard reads verdicts from this tab.
+
+   IMPORTANT - there are only TWO verdicts, and MEDIUM maps to 'high_risk':
+   'low' means the AI approved the expense outright and no human will ever look
+   at it. 'high_risk' means it goes to the CFO's review queue. MEDIUM is the tier
+   where the AI wanted an explanation from the employee, so mapping it to 'low'
+   would auto-approve exactly the expenses nobody was confident about. Keep your
+   three Slack replies exactly as they are - only the stored verdict collapses to
+   two values, not your Slack routing.
+
+Please give me: the updated Code node JavaScript, the configuration for each new
+Google Sheets node, and the exact connection changes, for BOTH paths.
+```
+
+---
+
+#### How AA (or you) confirms it worked
+
+Submit one receipt through the **Slack file-upload** path, then check the sheet:
+
+1. A new row in **Receipts** with a plain number in `receipt_id` (click the cell — the formula bar must show the number, not `=ROW()-1`).
+2. A new row in **Verdicts** whose `receipt_id` is **that same number**.
+3. `status` reads `pending_review`.
+4. `raw_file_reference` holds the Slack file id (looks like `F0C0FTHGKQV`).
+5. Repeat with a low-risk receipt — a row must still appear in both tabs, with `verdict = low` and `status = approved`.
+6. Open the dashboard's Review Queue. The high-risk receipt should be sitting there with its summary text; the low-risk one must **not** appear (it was auto-approved) but must show in the Expense Browser.
+
+C3 is done when steps 1-6 pass for all three risk tiers, not just high-risk.
 
 ### The DA side of C3, as built
 
@@ -266,7 +421,7 @@ def final_verdict(policy_checks: dict, audit: dict) -> tuple[str, str]:
               or audit["business_relevance"] == "UNCLEAR"
               or audit["reasonableness"] in ("QUESTIONABLE", "INSUFFICIENT_INFORMATION")
               or audit["confidence"] < 0.75)
-    return ("flagged", "MEDIUM") if medium else ("compliant", "LOW")
+    return ("high_risk", "MEDIUM") if medium else ("low", "LOW")
 ```
 
 Then `/api/audit` would call `run_contextual_audit(payload)` itself instead of trusting a pre-computed `risk_level`, and n8n's "AI Contextual Audit" node would be repointed at this Flask endpoint instead of OpenAI directly (URL swap + simplified body, and simplify "Parse Audit Result" to read the flat response instead of walking OpenAI's envelope).
@@ -282,7 +437,7 @@ Then `/api/audit` would call `run_contextual_audit(payload)` itself instead of t
 > call, not just mocks.
 
 **Dependencies:** C2's benchmark data (still not built) — worked around, see below. **Can start now: done.**
-**Software:** free FRED API key, `requests`, `python-dotenv`.
+**Software:** `requests`. No API key — the inflation source needs none.
 
 ### What it does
 
@@ -300,12 +455,12 @@ and classifies the claim as one of:
 |---|---|
 | `WITHIN_LIMIT` | Inside the figure as written — no argument either way |
 | `GOOD_DEAL` | Over the stale figure, inside the re-priced one. **This is the ticket's whole point, and it does not raise a flag.** |
-| `OVER_GUIDELINE` | Over the re-priced figure, but Section 5.2 calls that figure a guideline, not a ceiling → flagged for explanation |
+| `OVER_GUIDELINE` | Over the re-priced figure, but Section 5.2 calls that figure a guideline, not a ceiling → goes to review rather than auto-approving |
 | `POLICY_VIOLATION` | Over the re-priced figure on a hard limit → high risk |
 | `NO_LIMIT` | No numeric ceiling for this category; the general approval thresholds govern |
 
 The outcome is folded into the verdict's `reason` text rather than becoming a
-fourth verdict value — verdicts stay `compliant` / `flagged` / `high_risk`.
+third verdict value — verdicts are `low` or `high_risk`.
 
 ### Where the numbers came from
 
@@ -325,7 +480,7 @@ handbook ones, so they are deliberately *not* inflation-adjusted. n8n's
 
 1. Get a FRED key: `fred.stlouisfed.org` → **My Account** → **API Keys** → **Request API Key**. Free and instant.
 2. `cp .env.example .env` and paste the key in as `FRED_API_KEY`.
-3. `pytest -q` — 88 tests, no credentials or network needed.
+3. `pytest -q` — 100 tests, no credentials or network needed.
 4. `python scripts/c4_demo.py` — runs five constructed examples against live CPI.
 
 ### Acceptance evidence
@@ -348,18 +503,49 @@ and printed with their CPI provenance by `scripts/c4_demo.py`. Paste that script
 output into MCP-27 — it is the artifact, and it exits non-zero if anything
 misclassifies.
 
-### Standing in for C2
+### One global series, not one per country
 
-C2 (AA's scheduled CPI pull) still does not exist. `cpi_for()` calls FRED
-directly and caches per process, which is what the cron job would have provided.
+Inflation comes from a single world aggregate (World Bank
+`FP.CPI.TOTL.ZG`, world), applied to every receipt wherever it was incurred.
+That is not an approximation of per-country data — it is the right shape for the
+question. What gets re-priced is Meridian's own firm-wide GBP limit, and a
+£75-a-head limit is £75 a head whether the dinner was in Berlin or Bristol. No
+per-country routing, no API key.
+
+The cost, stated plainly: the global series is **annual and published in
+arrears** — the latest full year is 2025, where a national index like the UK's
+runs monthly to 2026-07. So the adjustment is year-granular, lags by about a
+year, and therefore under-states rather than over-states the re-pricing. A base
+period's month is ignored (March and November 2019 re-price identically).
+
+### The CPI sheet n8n reads, and standing in for C2
+
+n8n's agent tool sub-workflow reads inflation from a **CPI** tab rather than
+calling the World Bank itself — one less external dependency at audit time, and
+it guarantees the agent and this repo agree on the numbers.
+
+`scripts/sync_cpi.py` populates it: one row per year with `series_id`, `year`,
+`inflation_rate_pct`, `price_index`, `fetched_at`, `source`. The index is chained
+from the rates and anchored at 100, so re-pricing a limit set in year A to year B
+is `index(B) / index(A)` — a lookup rather than a calculation the agent could get
+wrong. `tests/test_cpi_sheet.py` asserts that division reproduces the engine's own
+factor exactly, so Slack and the dashboard cannot disagree about the same receipt.
+
+Before the first run: set `CPI_SPREADSHEET_ID` at the top of `api/sheets.py`
+(leave unset for a CPI tab in the main spreadsheet), and share that spreadsheet
+with the service account's `client_email` as an **Editor** — link-sharing does not
+cover API access.
+
+C2 (AA's scheduled pull) is the n8n-native version of exactly this job: a cron
+node writing the same tab on a schedule, replacing the manual script.
 Two things make this safe to hand over:
 
-* Every CPI observation actually used gets written to a **Benchmarks** tab
-  (`series_id`, `period`, `value`, `fetched_at`, `source`), once per process, so
-  any past verdict can be re-checked against the index level it was decided on.
-  That tab is the shape C2 should write when AA builds it.
-* When C2 lands, point `cpi_for()` at the Benchmarks tab instead of FRED.
-  Nothing else in the module changes.
+* The full series is written to a **CPI** tab by `scripts/sync_cpi.py`
+  (`series_id`, `year`, `inflation_rate_pct`, `price_index`, `fetched_at`,
+  `source`), which is both what n8n's agent reads and the exact shape C2 should
+  write on a schedule.
+* When C2 lands, it replaces that script — a cron node writing the same tab.
+  Nothing in `api/audit.py` changes.
 
 ### Known gaps, stated rather than hidden
 
@@ -369,9 +555,11 @@ Two things make this safe to hand over:
   to weigh the exchange rate and local purchasing power themselves. Amara called
   both out explicitly, so this is a real gap — closing it needs an FX rate source
   keyed on the transaction date (Handbook 12.2).
-* **The CPI series is US (`CPIAUCSL`).** FRED's UK series (`GBRCPIALLMINMEI`)
-  stops in early 2025, which cannot answer a 2026 question. Override with
-  `CPI_SERIES_ID` if a better current UK series turns up.
+* **The inflation figure is annual and about a year in arrears.** A single global
+  series is the deliberate simplification (see above); the price is granularity
+  and recency. If month-level, current-to-2026 precision is ever needed, the UK
+  ONS series `D7BT` is monthly and current — at the cost of reintroducing a
+  per-country choice.
 * **Attendee count is not captured.** Per-head limits therefore divide by 1
   unless a caller passes `attendee_count`, so a shared dinner reads as an
   overage. This is one of the schema fields Mason flagged as missing; until B3
@@ -419,8 +607,8 @@ Example output for a high-risk client dinner:
 ### Dashboard half — done
 
 `pages/2_Review_Queue.py` now shows the summary under each receipt (it previously
-showed only the bare verdict string), sorts high-risk above flagged so Amara's own
-queue is on top, takes an optional note that is recorded in the audit trail, and
+showed only the bare verdict string), orders newest-first, takes an optional note
+that is recorded in the audit trail, and
 says so explicitly when a verdict has no stored reasoning rather than rendering a
 blank card.
 

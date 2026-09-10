@@ -23,23 +23,16 @@ from flask import Flask, request
 
 try:  # importable both as `api.app` and as `python api/app.py`
     from api.audit import contextual_validation, final_verdict, map_verdict
-    from api.policy import normalise_category
-    from api.sheets import (RECEIPT_HEADERS, audit_trail, insert_receipt,
-                            insert_verdict, receipts_ws, record_cpi_snapshot)
+    from api.policy import VERDICT_LOW, normalise_category
+    from api.sheets import RECEIPT_HEADERS, audit_trail, insert_receipt, receipts_ws
     from api.summary import build_summary
 except ImportError:  # pragma: no cover - exercised only by `python api/app.py`
     from audit import contextual_validation, final_verdict, map_verdict
-    from policy import normalise_category
-    from sheets import (RECEIPT_HEADERS, audit_trail, insert_receipt,
-                        insert_verdict, receipts_ws, record_cpi_snapshot)
+    from policy import VERDICT_LOW, normalise_category
+    from sheets import RECEIPT_HEADERS, audit_trail, insert_receipt, receipts_ws
     from summary import build_summary
 
 app = Flask(__name__)
-
-#: CPI provenance is written to the Benchmarks tab once per process, not once
-#: per request — the index only moves monthly, and a Sheets round-trip per audit
-#: would put a live demo over Amara's "a few seconds" latency bar.
-_cpi_recorded: set[tuple[str, str]] = set()
 
 
 @app.get("/health")
@@ -69,10 +62,18 @@ def audit_receipt():
     that only has the raw LLM output still gets a verdict.
 
     Either way C4 runs on the receipt (inflation-adjusted limit comparison) and
-    C5 builds the summary, and both are folded into the single `reason` string
-    stored against the verdict — verdicts stay `compliant` / `flagged` /
-    `high_risk`, and "good deal" or "policy violation" is reasoning, not a
-    fourth verdict value.
+    C5 builds the summary, and both are folded into the single `verdict_reason`
+    string stored on the receipt row — verdicts are `low_risk` or `high_risk`,
+    and "good deal" or "policy violation" is reasoning, not a third verdict
+    value.
+
+    A `low_risk` verdict is approved on the spot: the receipt is written with
+    `status = approved` and no `decided_at` (nobody decided it, the engine
+    cleared it), so it goes straight into the approved-expense reporting and
+    never reaches the review queue. A `high_risk` verdict is written
+    `pending_review` and waits for Amara, who stamps `decided_at` when she acts.
+    Nothing else auto-approves anywhere, so this endpoint is the single place
+    that decision is made.
     """
     payload = request.get_json(silent=True) or {}
     engine_input = payload.get("audit_engine_input") or {}
@@ -103,7 +104,6 @@ def audit_receipt():
         receipt.get("total"), category,
         units=payload.get("attendee_count") or payload.get("units") or 1,
         currency=receipt.get("currency"))
-    _record_cpi_once(validation)
 
     risk_level = payload.get("risk_level") or final.get("risk_level")
     if risk_level:
@@ -126,6 +126,7 @@ def audit_receipt():
                             or payload.get("summary") or ""),
         validation=validation, submitter=submitter)
 
+    auto_approved = verdict == VERDICT_LOW
     receipt_id = insert_receipt({
         "receipt_date": receipt.get("transaction_date"),
         "merchant": receipt.get("merchant"),
@@ -137,31 +138,22 @@ def audit_receipt():
         "submitter": submitter,
         "raw_file_reference": (receipt.get("file_name")
                                or payload.get("raw_file_reference") or ""),
-        "status": "pending_review",
+        "status": "approved" if auto_approved else "pending_review",
+        "verdict": verdict,
+        "verdict_reason": summary["summary"],
     })
-    verdict_id = insert_verdict(receipt_id, verdict, summary["summary"])
 
     return {
         "receipt_id": receipt_id,
-        "verdict_id": verdict_id,
         "verdict": verdict,
         "risk_level": risk_level,
+        "auto_approved": auto_approved,
+        "needs_review": not auto_approved,
         "flags": flags,
         "contextual_validation": validation,
         "summary": summary["summary"],
         "slack_message": summary["slack_message"],
     }
-
-
-def _record_cpi_once(validation: dict) -> None:
-    cpi = validation.get("cpi")
-    if not cpi:
-        return
-    key = (cpi["series_id"], cpi["base_period"])
-    if key in _cpi_recorded:
-        return
-    _cpi_recorded.add(key)
-    record_cpi_snapshot(cpi)
 
 
 @app.post("/api/validate")
@@ -229,7 +221,8 @@ def approved_expenses():
 
 @app.get("/api/receipts/<int:receipt_id>")
 def receipt_audit_trail(receipt_id: int):
-    """Full paper trail for one receipt — submission, verdicts, decisions."""
+    """Full record for one receipt — submission, verdict and decision, all on
+    one row now that there is a single Receipts tab."""
     trail = audit_trail(receipt_id)
     if trail is None:
         return {"error": f"no receipt with id {receipt_id}"}, 404

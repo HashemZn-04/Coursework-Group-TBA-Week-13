@@ -15,8 +15,7 @@ from api import app as app_module
 
 
 @pytest.fixture
-def client(sheet_tabs, fake_fred, monkeypatch):
-    monkeypatch.setattr(app_module, "_cpi_recorded", set())
+def client(sheet_tabs, fake_cpi):
     app_module.app.config.update(TESTING=True)
     return app_module.app.test_client()
 
@@ -67,18 +66,18 @@ def test_health(client):
 # C3 — every ingested receipt gets a stored verdict
 # --------------------------------------------------------------------------- #
 
-def test_audit_persists_a_receipt_and_a_verdict(client, sheet_tabs):
+def test_audit_persists_a_receipt_with_its_verdict(client, sheet_tabs):
     body = client.post("/api/audit", json=NESTED_PAYLOAD).get_json()
 
     assert body["receipt_id"] == 1
     # The contextual audit passed it, but £264 measured against a one-head
-    # client entertainment guideline does not — so it lands as flagged.
-    assert body["verdict"] == "flagged"
+    # client entertainment guideline does not — so it goes to a human.
+    assert body["verdict"] == "high_risk"
     assert body["risk_level"] == "MEDIUM"
+    assert body["auto_approved"] is False
 
     receipts = sheet_tabs["Receipts"].get_all_records()
-    verdicts = sheet_tabs["Verdicts"].get_all_records()
-    assert len(receipts) == 1 and len(verdicts) == 1
+    assert len(receipts) == 1
 
     receipt = receipts[0]
     assert receipt["receipt_id"] == "1"
@@ -89,21 +88,20 @@ def test_audit_persists_a_receipt_and_a_verdict(client, sheet_tabs):
     assert receipt["raw_file_reference"] == "ivy-dinner.jpg"
     # 'pending_review', not 'pending' — Review Queue and the dashboard both
     # filter on this exact string.
-    assert receipt["status"] == "pending_review"
+    assert receipt["status"] == "pending_review"    # high risk waits for Amara
     assert json.loads(receipt["line_items"])[0]["description"] == "Set menu x3"
 
-    # The verdict points back at a real numeric receipt_id, which is the join
-    # the Review Queue depends on.
-    assert verdicts[0]["receipt_id"] == "1"
-    assert verdicts[0]["verdict"] == "flagged"
-    assert "The Ivy" in verdicts[0]["reason"]
+    assert receipt["verdict"] == "high_risk"
+    assert "The Ivy" in receipt["verdict_reason"]
+    assert receipt["decided_at"] == ""
 
 
 def test_receipt_ids_increment_rather_than_colliding(client, sheet_tabs):
     first = client.post("/api/audit", json=NESTED_PAYLOAD).get_json()
     second = client.post("/api/audit", json=NESTED_PAYLOAD).get_json()
     assert (first["receipt_id"], second["receipt_id"]) == (1, 2)
-    assert [r["receipt_id"] for r in sheet_tabs["Verdicts"].get_all_records()] == ["1", "2"]
+    assert [r["receipt_id"] for r in sheet_tabs["Receipts"].get_all_records()] == [
+        "1", "2"]
 
 
 def test_malformed_ids_already_in_the_sheet_do_not_break_the_next_one(client, sheet_tabs):
@@ -111,8 +109,9 @@ def test_malformed_ids_already_in_the_sheet_do_not_break_the_next_one(client, sh
     is fixed upstream, a new insert has to step over it rather than crash."""
     sheet_tabs["Receipts"].append_row(
         ["=ROW()-1", "2026-08-01", "Pret", "[]", "9.20", "0", "subsistence",
-         "GBP", "U04SAM", "ref", "pending", "", ""])
-    assert client.post("/api/audit", json=NESTED_PAYLOAD).get_json()["receipt_id"] == 1
+         "GBP", "U04SAM", "ref", "pending", "", "", "", "", ""])
+    assert client.post(
+        "/api/audit", json=NESTED_PAYLOAD).get_json()["receipt_id"] == 1
 
 
 def test_flat_payload_shape_is_accepted_too(client, sheet_tabs):
@@ -127,8 +126,9 @@ def test_flat_payload_shape_is_accepted_too(client, sheet_tabs):
     }).get_json()
 
     assert body["verdict"] == "high_risk"
-    assert sheet_tabs["Receipts"].get_all_records()[0]["merchant"] == "Heathrow Express"
-    assert "Heathrow Express" in sheet_tabs["Verdicts"].get_all_records()[0]["reason"]
+    receipt = sheet_tabs["Receipts"].get_all_records()[0]
+    assert receipt["merchant"] == "Heathrow Express"
+    assert "Heathrow Express" in receipt["verdict_reason"]
 
 
 def test_n8n_supplied_risk_level_is_trusted_over_recomputation(client):
@@ -148,22 +148,24 @@ def test_n8n_supplied_risk_level_is_trusted_over_recomputation(client):
 # --------------------------------------------------------------------------- #
 
 def test_audit_folds_c4_into_the_stored_reason(client, sheet_tabs):
-    """A £264 dinner for one is over the re-priced £98.16 guideline, so the
-    verdict drops to flagged and the stored reason says why in words."""
+    """A £264 dinner for one is over the re-priced £98.11 guideline, so it goes
+    to a human and the stored reason says why in words."""
     body = client.post("/api/audit", json=NESTED_PAYLOAD).get_json()
     validation = body["contextual_validation"]
 
     assert validation["assessment"] == "OVER_GUIDELINE"
-    assert validation["adjusted_limit"] == 98.16
-    assert validation["cpi"]["series_id"] == "CPIAUCSL"
+    assert validation["adjusted_limit"] == 98.11
+    assert validation["cpi"]["series_id"] == "WLD.FP.CPI.TOTL.ZG"
     # Folded into reasoning, not promoted to a fourth verdict value.
-    assert body["verdict"] in {"compliant", "flagged", "high_risk"}
-    assert "guideline" in sheet_tabs["Verdicts"].get_all_records()[0]["reason"]
+    assert body["verdict"] in {"low_risk", "high_risk"}
+    assert "guideline" in sheet_tabs["Receipts"].get_all_records()[
+        0]["verdict_reason"]
 
 
 def test_attendee_count_changes_the_per_head_answer(client):
     payload = {**NESTED_PAYLOAD, "attendee_count": 3}
-    validation = client.post("/api/audit", json=payload).get_json()["contextual_validation"]
+    validation = client.post(
+        "/api/audit", json=payload).get_json()["contextual_validation"]
     assert validation["unit_amount"] == 88.0
     assert validation["assessment"] == "GOOD_DEAL"
 
@@ -175,23 +177,12 @@ def test_validate_endpoint_computes_without_writing_anything(client, sheet_tabs)
     assert sheet_tabs["Receipts"].get_all_records() == []
 
 
-def test_cpi_provenance_is_written_to_the_benchmarks_tab_once(client, sheet_tabs):
+def test_auditing_does_not_write_to_the_cpi_sheet(client, sheet_tabs):
+    """The CPI tab is reference data refreshed by scripts/sync_cpi.py, not
+    something an audit appends to. Writing per request would also add a Sheets
+    round-trip to every audit, against Amara's "a few seconds" bar."""
     client.post("/api/audit", json=NESTED_PAYLOAD)
-    client.post("/api/audit", json=NESTED_PAYLOAD)
-    rows = sheet_tabs["Benchmarks"].get_all_records()
-    assert [r["period"] for r in rows] == ["2019-03-01", "2026-07-01"]
-    assert rows[0]["series_id"] == "CPIAUCSL"
-
-
-def test_a_sheets_failure_writing_provenance_does_not_fail_the_audit(
-        client, sheet_tabs, monkeypatch):
-    from api import sheets
-
-    def boom():
-        raise RuntimeError("quota exceeded")
-
-    monkeypatch.setattr(sheets, "benchmarks_ws", boom)
-    assert client.post("/api/audit", json=NESTED_PAYLOAD).status_code == 200
+    assert sheet_tabs["CPI"].get_all_records() == []
 
 
 # --------------------------------------------------------------------------- #
@@ -202,13 +193,14 @@ def test_a_sheets_failure_writing_provenance_does_not_fail_the_audit(
 def populated(sheet_tabs):
     rows = [
         [1, "2026-08-01", "Pret", "[]", 9.20, 0, "subsistence", "GBP", "U04SAM",
-         "a.jpg", "approved", "", ""],
+         "a.jpg", "approved", "low_risk", "", "", "", ""],
         [2, "2026-08-15", "The Ivy", "[]", 264.00, 24, "client_entertainment",
-         "GBP", "U04ALEX", "b.jpg", "approved", "", ""],
+         "GBP", "U04ALEX", "b.jpg", "approved", "low_risk", "", "", "", ""],
         [3, "2026-09-01", "Trainline", "[]", 88.40, 0, "travel", "GBP", "U04SAM",
-         "c.jpg", "pending_review", "", ""],
+         "c.jpg", "pending_review", "high_risk", "", "", "", ""],
         [4, "2026-07-02", "Figma", "[]", 45.00, 0, "software_technology", "GBP",
-         "U04ALEX", "d.jpg", "rejected", "", ""],
+         "U04ALEX", "d.jpg", "rejected", "high_risk", "", "", "",
+         "2026-07-05T09:00:00+00:00"],
     ]
     for row in rows:
         sheet_tabs["Receipts"].append_row(row)
@@ -223,35 +215,43 @@ def test_expenses_defaults_to_approved_only(client, populated):
 
 def test_expenses_status_all_widens_the_query_for_qa(client, populated):
     assert client.get("/api/expenses?status=all").get_json()["total"] == 4
-    assert client.get("/api/expenses?status=pending_review").get_json()["total"] == 1
+    assert client.get(
+        "/api/expenses?status=pending_review").get_json()["total"] == 1
 
 
 def test_expenses_filters(client, populated):
-    assert client.get("/api/expenses?category=subsistence").get_json()["total"] == 1
-    assert client.get("/api/expenses?submitter=U04ALEX").get_json()["total"] == 1
+    assert client.get(
+        "/api/expenses?category=subsistence").get_json()["total"] == 1
+    assert client.get(
+        "/api/expenses?submitter=U04ALEX").get_json()["total"] == 1
     assert client.get("/api/expenses?min_amount=100").get_json()["total"] == 1
     assert client.get("/api/expenses?max_amount=100").get_json()["total"] == 1
-    assert client.get("/api/expenses?start_date=2026-08-10").get_json()["total"] == 1
-    assert client.get("/api/expenses?end_date=2026-08-10").get_json()["total"] == 1
+    assert client.get(
+        "/api/expenses?start_date=2026-08-10").get_json()["total"] == 1
+    assert client.get(
+        "/api/expenses?end_date=2026-08-10").get_json()["total"] == 1
 
 
 def test_expenses_pagination(client, populated):
     first = client.get("/api/expenses?page=1&page_size=1").get_json()
     second = client.get("/api/expenses?page=2&page_size=1").get_json()
-    assert first["total"] == second["total"] == 2      # total is the match count
+    # total is the match count
+    assert first["total"] == second["total"] == 2
     assert len(first["results"]) == len(second["results"]) == 1
     assert first["results"][0]["receipt_id"] != second["results"][0]["receipt_id"]
     assert client.get("/api/expenses?page=99").get_json()["results"] == []
 
 
 def test_expenses_page_size_is_capped_and_floored(client, populated):
-    assert client.get("/api/expenses?page_size=500").get_json()["page_size"] == 100
+    assert client.get(
+        "/api/expenses?page_size=500").get_json()["page_size"] == 100
     assert client.get("/api/expenses?page_size=0").get_json()["page_size"] == 1
 
 
 def test_expenses_dates_come_back_as_iso_strings(client, populated):
     results = client.get("/api/expenses").get_json()["results"]
-    assert sorted(r["receipt_date"] for r in results) == ["2026-08-01", "2026-08-15"]
+    assert sorted(r["receipt_date"]
+                  for r in results) == ["2026-08-01", "2026-08-15"]
 
 
 def test_expenses_on_an_empty_sheet_is_an_empty_page_not_an_error(client):
@@ -263,19 +263,60 @@ def test_expenses_on_an_empty_sheet_is_an_empty_page_not_an_error(client):
 # C1 — the paper trail
 # --------------------------------------------------------------------------- #
 
-def test_audit_trail_reconstructs_submission_verdict_and_decision(
-        client, sheet_tabs):
+def test_audit_trail_reconstructs_submission_and_verdict(client, sheet_tabs):
     client.post("/api/audit", json=NESTED_PAYLOAD)
-    sheet_tabs["Decisions"].append_row(
-        [1, 1, "approved", "amara.osei", "2026-09-09T10:00:00+00:00",
-         "Confirmed with the Rowan team"])
 
     trail = client.get("/api/receipts/1").get_json()
-    assert trail["receipt"]["merchant"] == "The Ivy"
-    assert trail["verdicts"][0]["verdict"] == "flagged"
-    assert trail["decisions"][0]["decided_by"] == "amara.osei"
-    assert trail["decisions"][0]["notes"] == "Confirmed with the Rowan team"
+    assert trail["merchant"] == "The Ivy"
+    assert trail["verdict"] == "high_risk"
 
 
 def test_audit_trail_404s_for_an_unknown_receipt(client, sheet_tabs):
     assert client.get("/api/receipts/999").status_code == 404
+
+
+# --------------------------------------------------------------------------- #
+# Auto-approval — what a `low_risk` verdict now does on its own
+# --------------------------------------------------------------------------- #
+
+LOW_RISK_PAYLOAD = {
+    "merchant": "Trainline", "transaction_date": "2026-09-01", "total": 42.00,
+    "tax": 0.0, "currency": "GBP", "category": "TRAVEL", "submitted_by": "U04SAM",
+    "risk_level": "LOW", "summary": "Standard class rail fare to a client site.",
+}
+
+
+def test_low_risk_receipt_is_approved_without_a_human(client, sheet_tabs):
+    body = client.post("/api/audit", json=LOW_RISK_PAYLOAD).get_json()
+
+    assert body["verdict"] == "low_risk"
+    assert body["auto_approved"] is True
+    assert body["needs_review"] is False
+
+    # Approved outright, so it lands in the approved-expense reporting straight
+    # away rather than sitting in a queue nobody is going to look at.
+    receipt = sheet_tabs["Receipts"].get_all_records()[0]
+    assert receipt["status"] == "approved"
+    assert receipt["decided_at"] == ""
+
+
+def test_low_risk_receipt_never_reaches_the_review_queue(client, sheet_tabs):
+    from dashboard import data
+    client.post("/api/audit", json=LOW_RISK_PAYLOAD)
+    data.load_receipts.clear()
+
+    df = data.load_expenses()
+    assert df["verdict"].tolist() == ["low_risk"]
+    assert df[df["verdict"] == "high_risk"].empty
+
+
+def test_medium_risk_is_not_auto_approved(client, sheet_tabs):
+    """The collapse's one real hazard: n8n's MEDIUM tier must not fall into the
+    auto-approving bucket."""
+    body = client.post("/api/audit", json={**LOW_RISK_PAYLOAD,
+                                           "risk_level": "MEDIUM"}).get_json()
+    assert body["verdict"] == "high_risk"
+    assert body["auto_approved"] is False
+    receipt = sheet_tabs["Receipts"].get_all_records()[0]
+    assert receipt["status"] == "pending_review"
+    assert receipt["decided_at"] == ""
