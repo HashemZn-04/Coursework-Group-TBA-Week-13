@@ -133,7 +133,8 @@ def approved_expenses():
     page = max(int(request.args.get("page", 1)), 1)
     page_size = min(max(int(request.args.get("page_size", 25)), 1), 100)
 
-    df = pd.DataFrame(receipts_ws().get_all_records(), columns=RECEIPT_HEADERS)
+    df = pd.DataFrame(receipts_ws().get_all_records(expected_headers=RECEIPT_HEADERS),
+                      columns=RECEIPT_HEADERS)
     if df.empty:
         return {"total": 0, "page": page, "page_size": page_size, "results": []}
 

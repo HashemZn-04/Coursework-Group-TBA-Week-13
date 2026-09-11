@@ -76,17 +76,25 @@ def render_forecast(expenses: pd.DataFrame, currency: str,
         rmse_col, r2_col = st.columns(2)
         rmse_display = ("—" if model["rmse_pct"] is None
                         else f"{model['rmse_pct']:.1f}%")
-        rmse_col.metric("Model RMSE", rmse_display,
-                        help="Root-mean-square error of the fitted line "
-                             "against the months it was trained on, as a "
-                             "share of the average month's spend in the fit "
-                             "— the typical size of the model's miss, "
-                             "comparable across currencies and categories.")
+        rmse_col.metric(f"{_FOCAL_KIND} RMSE", rmse_display,
+                        help=f"Root-mean-square error of the fitted line, "
+                             f"widened by how many months ahead this "
+                             f"{FOCAL_HORIZON_MONTHS}-month forecast reaches, "
+                             f"as a share of the average month's spend in "
+                             f"the fit — the typical size of THIS forecast's "
+                             f"miss specifically" +
+                             (f" (the {_CONTEXT_KIND} bars on the chart below "
+                              f"carry their own, larger miss, not shown here)"
+                              if _CONTEXT_KIND else "") +
+                             ", comparable across currencies and categories.")
         r2_col.metric("R²", "—" if model["r_squared"] is None
                      else f"{model['r_squared']:.2f}",
-                     help="Share of month-to-month variation the trend line "
-                          "explains. Blank when there is no variance to "
-                          "explain (a perfectly flat history).")
+                     help=f"Share of variation this {FOCAL_HORIZON_MONTHS}-month "
+                          f"forecast is expected to explain, discounted for "
+                          f"how far ahead it reaches — not a flat, "
+                          f"horizon-blind fit statistic. Blank when there is "
+                          f"no variance to explain (a perfectly flat "
+                          f"history).")
 
         st.caption(f"{result['detail']} {result['range']['basis']}")
         if result["inflation"]:

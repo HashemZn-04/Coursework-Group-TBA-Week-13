@@ -133,7 +133,12 @@ def parse_timestamps(values: pd.Series) -> pd.Series:
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)
 def load_receipts() -> pd.DataFrame:
-    records = receipts_ws().get_all_records()
+    # `expected_headers` sidesteps gspread's duplicate-header exception if a
+    # column gets appended to the live sheet outside this schema (seen live:
+    # extra blank/`total spend*` columns from a pivot someone built in the
+    # same tab) — extra columns still come back in `records`, and the
+    # `columns=RECEIPT_HEADERS` below already drops anything not in scope.
+    records = receipts_ws().get_all_records(expected_headers=RECEIPT_HEADERS)
     df = pd.DataFrame(records, columns=RECEIPT_HEADERS)
     if df.empty:
         return df.assign(line_items=pd.Series(dtype="object"),

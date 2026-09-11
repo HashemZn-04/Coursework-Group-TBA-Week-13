@@ -6,7 +6,7 @@ from api.policy import normalise_category
 from api.summary import format_money
 from dashboard.data import load_expenses
 from dashboard.forecast_view import render_forecast
-from dashboard.spend import (UNKNOWN_CURRENCY, default_currency,
+from dashboard.spend import (UNKNOWN_CURRENCY, currency_key, default_currency,
                              prevented_running_total, spend_over_time,
                              spend_summary)
 from dashboard.style import inject_responsive_metric_css
@@ -125,44 +125,55 @@ velocity_code = col1.selectbox(
     "Currency", currencies, format_func=currency_label, key="currency_velocity",
     index=currencies.index(default_currency(currencies)))
 
-velocity_data = spend_over_time(df, velocity_code)
-if velocity_data.empty:
+dated = df[(df["currency"].map(currency_key) == currency_key(velocity_code))
+          & df["date"].notna()]
+if dated.empty:
     st.info(f"No receipt in {currency_label(velocity_code)} has a readable date, so "
             f"there is nothing to plot over time.")
 else:
-    min_date = velocity_data.index.min()
-    max_date = velocity_data.index.max()
+    min_date = dated["date"].min()
+    max_date = dated["date"].max()
     date_range = col2.date_input(
         "Date range",
         value=(min_date, max_date),
         key="velocity_date_range"
     )
 
-    timeline = velocity_data
+    windowed = dated
     if len(date_range) == 2:
-        timeline = timeline[(timeline.index >= pd.Timestamp(date_range[0]))
-                            & (timeline.index <= pd.Timestamp(date_range[1]))]
+        windowed = dated[(dated["date"] >= pd.Timestamp(date_range[0]))
+                         & (dated["date"] <= pd.Timestamp(date_range[1]))]
 
-    chart_data = timeline.reset_index()
-    st.altair_chart(
-        alt.Chart(chart_data).mark_bar().encode(
-            x=alt.X("date:T", title="Period"),
-            y=alt.Y("spend:Q", title=f"Spend ({currency_label(velocity_code)})"),
-            tooltip=[alt.Tooltip("date:T", title="Period"),
-                     alt.Tooltip("spend:Q", title="Spend", format=",.2f"),
-                     alt.Tooltip("receipts:Q", title="Claims")],
-        ),
-        use_container_width=True,
-    )
-    grain = {"D": "day", "W": "week", "MS": "month", "QS": "quarter",
-             "YS": "year"}
-    freq = timeline.index.freqstr or ""
-    st.caption(
-        f"Spend per {grain.get(freq.split('-')[0], 'period')}, in "
-        f"{currency_label(velocity_code)} — {int(timeline['receipts'].sum())} claims "
-        f"across {len(timeline)} periods. Periods with no claims are drawn as "
-        f"zero, because a quiet month is a fact about velocity."
-    )
+    # Re-bucketed from the *selected* window, not the currency's whole
+    # history — `choose_freq` picks the finest grain that still fits under
+    # `MAX_CHART_BARS`, so narrowing the range to a couple of years zooms the
+    # bars from yearly down to monthly/quarterly instead of just hiding most
+    # of the same wide year-buckets.
+    timeline = spend_over_time(windowed, velocity_code)
+
+    if timeline.empty:
+        st.info("No receipt falls inside the selected date range.")
+    else:
+        chart_data = timeline.reset_index()
+        st.altair_chart(
+            alt.Chart(chart_data).mark_bar().encode(
+                x=alt.X("date:T", title="Period"),
+                y=alt.Y("spend:Q", title=f"Spend ({currency_label(velocity_code)})"),
+                tooltip=[alt.Tooltip("date:T", title="Period"),
+                         alt.Tooltip("spend:Q", title="Spend", format=",.2f"),
+                         alt.Tooltip("receipts:Q", title="Claims")],
+            ),
+            use_container_width=True,
+        )
+        grain = {"D": "day", "W": "week", "MS": "month", "QS": "quarter",
+                 "YS": "year"}
+        freq = timeline.index.freqstr or ""
+        st.caption(
+            f"Spend per {grain.get(freq.split('-')[0], 'period')}, in "
+            f"{currency_label(velocity_code)} — {int(timeline['receipts'].sum())} claims "
+            f"across {len(timeline)} periods. Periods with no claims are drawn as "
+            f"zero, because a quiet month is a fact about velocity."
+        )
 undated = int(df["date"].isna().sum())
 if undated:
     st.caption(f"{undated} receipt(s) omitted — no readable date.")

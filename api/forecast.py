@@ -183,25 +183,20 @@ def forecast_next_month(expenses: pd.DataFrame, as_of: str | None = None,
 
     model = LinearRegression().fit(x, y)
 
-    # The fit itself — residuals, RMSE, R² — doesn't depend on how far ahead
-    # any particular forecast reaches, only on how well the line matches the
-    # months it was trained on. Computed once and reused for every horizon.
+    # The one-step residual spread — computed once, horizon-independent —
+    # is the base every horizon's own RMSE/R²/range widens from below. It is
+    # NOT itself "the model's RMSE": a fit that is dead-on for the months it
+    # was trained on but is asked to reach five months past the last of them
+    # should report a worse RMSE/R² than one reaching one month past — see
+    # `horizon_at` below.
     residuals = [actual - float(pred)
                  for actual, pred in zip(y, model.predict(x))]
     dof = max(len(fittable) - 2, 1)
     variance = sum(r * r for r in residuals) / dof
     residual_std = variance ** 0.5
-    rmse = (sum(r * r for r in residuals) / len(residuals)) ** 0.5
 
     mean_y = sum(y) / len(y)
-    # RMSE relative to the average month fitted, so the miss can be read as a
-    # share of typical spend rather than in currency, and compared across
-    # currencies and categories on the same scale.
-    rmse_pct = None if mean_y == 0 else (rmse / mean_y) * 100
-
     total_ss = sum((value - mean_y) ** 2 for value in y)
-    r_squared = (None if total_ss == 0
-                 else 1 - sum(r * r for r in residuals) / total_ss)
 
     trailing = [row.spend for row in fittable[-BASELINE_MONTHS:]]
     baseline = sum(trailing) / len(trailing)
@@ -211,10 +206,20 @@ def forecast_next_month(expenses: pd.DataFrame, as_of: str | None = None,
         steps_ahead = (target - pd.Period(fittable[-1].month, freq="M")).n
         point = float(model.predict([[(target - origin).n]])[0])
         forecast = max(point, 0.0)  # spend cannot be negative
-        # Band widens with the horizon (sqrt of steps ahead) and is floored
-        # against the larger of forecast/baseline, so a forecast clamped to
-        # zero can't read as certainty.
-        half_width = max(1.96 * residual_std * (steps_ahead ** 0.5),
+
+        # Residual spread widens with the horizon (sqrt of steps ahead) — the
+        # same growth this app's range half-width has always used — so RMSE
+        # and R² for a 1-month-out forecast are reported separately from, and
+        # better than, a 3-month-out one rather than repeating one flat,
+        # horizon-blind fit statistic under both.
+        horizon_std = residual_std * (steps_ahead ** 0.5)
+        horizon_rmse_pct = None if mean_y == 0 else (horizon_std / mean_y) * 100
+        horizon_r_squared = (None if total_ss == 0 else
+                             1 - (horizon_std ** 2 * len(fittable)) / total_ss)
+
+        # Floored against the larger of forecast/baseline, so a forecast
+        # clamped to zero can't read as certainty.
+        half_width = max(1.96 * horizon_std,
                          MIN_BAND_FRACTION * max(forecast, baseline))
         return {
             "months_ahead": months_ahead,
@@ -223,10 +228,15 @@ def forecast_next_month(expenses: pd.DataFrame, as_of: str | None = None,
             "forecast": round(forecast, 2),
             "range": {"low": round(max(forecast - half_width, 0.0), 2),
                       "high": round(forecast + half_width, 2)},
+            "rmse": round(horizon_std, 2),
+            "rmse_pct": None if horizon_rmse_pct is None else round(horizon_rmse_pct, 2),
+            "r_squared": (None if horizon_r_squared is None
+                         else round(horizon_r_squared, 4)),
         }
 
     # One entry per month ahead, 1..FORECAST_HORIZON_MONTHS — the dashboard
-    # headlines FOCAL_HORIZON_MONTHS and plots the rest for context.
+    # headlines FOCAL_HORIZON_MONTHS (its own RMSE/R² included) and plots the
+    # rest for context only.
     horizons = [horizon_at(h) for h in range(1, FORECAST_HORIZON_MONTHS + 1)]
     focal = horizons[FOCAL_HORIZON_MONTHS - 1]
 
@@ -271,11 +281,11 @@ def forecast_next_month(expenses: pd.DataFrame, as_of: str | None = None,
         "model": {"method": "sklearn.linear_model.LinearRegression",
                   "slope_per_month": round(float(model.coef_[0]), 2),
                   "intercept": round(float(model.intercept_), 2),
-                  "r_squared": None if r_squared is None else round(r_squared, 4),
+                  "r_squared": focal["r_squared"],
                   "months_fitted": len(fittable),
                   "steps_ahead": focal["steps_ahead"],
                   "residual_std": round(residual_std, 2),
-                  "rmse": round(rmse, 2),
-                  "rmse_pct": None if rmse_pct is None else round(rmse_pct, 2)},
+                  "rmse": focal["rmse"],
+                  "rmse_pct": focal["rmse_pct"]},
         "diagnostics": diagnostics,
     }

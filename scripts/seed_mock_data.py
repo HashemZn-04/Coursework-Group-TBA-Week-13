@@ -363,7 +363,7 @@ def main():
     from api.sheets import RECEIPT_HEADERS, receipts_ws, next_id  # noqa: E402
 
     ws = receipts_ws()
-    start_id = next_id(ws, "receipt_id")
+    start_id = next_id(ws, "receipt_id", RECEIPT_HEADERS)
     values = []
     for offset, row in enumerate(rows):
         row["receipt_id"] = start_id + offset

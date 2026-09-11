@@ -115,7 +115,10 @@ class FakeWorksheet:
     def row_values(self, index):
         return self.headers if index == 1 else []
 
-    def get_all_records(self):
+    def get_all_records(self, expected_headers=None):
+        # `expected_headers` only changes gspread's duplicate-header check on
+        # the real API; the fake's headers are never duplicated, so it is
+        # accepted (production code passes it) and otherwise ignored.
         return [dict(zip(self.headers, row)) for row in self.rows]
 
     def append_row(self, values, value_input_option=None):

@@ -63,8 +63,8 @@ def cpi_ws():
     return ensure_ws(CPI_TAB, CPI_HEADERS, CPI_SPREADSHEET_ID)
 
 
-def next_id(ws, id_col):
-    records = ws.get_all_records()
+def next_id(ws, id_col, expected_headers=None):
+    records = ws.get_all_records(expected_headers=expected_headers)
     ids = []
     for r in records:
         try:
@@ -76,7 +76,7 @@ def next_id(ws, id_col):
 
 def insert_receipt(fields: dict) -> int:
     ws = receipts_ws()
-    new_id = next_id(ws, "receipt_id")
+    new_id = next_id(ws, "receipt_id", RECEIPT_HEADERS)
     now = datetime.now(timezone.utc).isoformat()
     row = {**{h: "" for h in RECEIPT_HEADERS}, **fields, "receipt_id": new_id,
            "status": fields.get("status", "pending_review"), "created_at": now, "updated_at": now,
@@ -94,7 +94,7 @@ def insert_receipt(fields: dict) -> int:
 def update_receipt_decision(receipt_id: int, status: str,
                             decided_at: str | None = None) -> bool:
     ws = receipts_ws()
-    for i, record in enumerate(ws.get_all_records()):
+    for i, record in enumerate(ws.get_all_records(expected_headers=RECEIPT_HEADERS)):
         if matches(record, "receipt_id", receipt_id):
             row = i + 2  # header row, then 1-indexed
             ws.update_cell(row, RECEIPT_HEADERS.index("status") + 1, status)
@@ -114,7 +114,7 @@ def matches(record: dict, id_col: str, receipt_id: int) -> bool:
 
 
 def get_receipt(receipt_id: int) -> dict | None:
-    for record in receipts_ws().get_all_records():
+    for record in receipts_ws().get_all_records(expected_headers=RECEIPT_HEADERS):
         if matches(record, "receipt_id", receipt_id):
             return record
     return None
