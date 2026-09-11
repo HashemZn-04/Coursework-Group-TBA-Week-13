@@ -214,8 +214,13 @@ def forecast_next_month(expenses: pd.DataFrame, as_of: str | None = None,
         # horizon-blind fit statistic under both.
         horizon_std = residual_std * (steps_ahead ** 0.5)
         horizon_rmse_pct = None if mean_y == 0 else (horizon_std / mean_y) * 100
+        # Reconstructing an SS_res from horizon_std has to undo the same dof
+        # divisor used to build residual_std in the first place (variance =
+        # SS_res / dof), not multiply back by the month count — that swap
+        # inflated SS_res by a factor of len(fittable)/dof (36/34 on the live
+        # sheet), which understates an already-small R² by roughly double.
         horizon_r_squared = (None if total_ss == 0 else
-                             1 - (horizon_std ** 2 * len(fittable)) / total_ss)
+                             1 - (horizon_std ** 2 * dof) / total_ss)
 
         # Floored against the larger of forecast/baseline, so a forecast
         # clamped to zero can't read as certainty.
