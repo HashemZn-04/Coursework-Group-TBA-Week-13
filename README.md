@@ -137,7 +137,7 @@ Exits non-zero if any example classifies wrongly. Paste the output into MCP-27.
 ### Stretch-goal acceptance evidence
 
 ```bash
-python scripts/h1_demo.py     # H1 — next-month travel spend forecast
+python scripts/h1_demo.py     # H1 — 3-month-ahead travel spend forecast
 python scripts/i1_demo.py     # I1 — syndicated-spending detection
 ```
 
@@ -183,7 +183,7 @@ Opens at `http://localhost:8501`. Pages are auto-listed from `pages/`:
 
 | Page | Ticket | What it shows |
 |---|---|---|
-| Spend Overview | E2, H2 | Claimed / approved / at-risk / **prevented**, per currency; spend velocity; the running total of leakage prevented; spend by category; next month's travel forecast |
+| Spend Overview | E2, H2 | Claimed / approved / at-risk / **prevented**, per currency; spend velocity; the running total of leakage prevented; spend by category; 3-month-ahead travel forecast |
 | Review Queue | E4 | High-risk claims awaiting a decision, with the summary the submitter also got in Slack. A claim leaves the queue once it is decided |
 | Expense Browser | E5 | Every claim, filterable by date, category, submitter and amount |
 | Policy Health | E3 | Compliance state per month, most-broken handbook rules, breakdowns by category and submitter, and the "policy decay" count |
@@ -217,7 +217,7 @@ api/                   Audit engine
   policy.py            Handbook limits, with the section and date each came from
   summary.py           C5 — the natural-language summary, for Slack and dashboard
   sheets.py            Google Sheets persistence (the single Receipts tab)
-  forecast.py          H1 — next-month travel spend regression, and its refusals
+  forecast.py          H1 — 3-month-ahead travel spend regression, and its refusals
   clusters.py          I1 — syndicated-spending and duplicate-claim detection
   governance_prompt.py A3 — the system prompt n8n's audit node runs
 scripts/c4_demo.py     C4 acceptance evidence, runnable

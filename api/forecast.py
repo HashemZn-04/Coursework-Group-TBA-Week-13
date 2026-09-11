@@ -15,6 +15,11 @@ MIN_HISTORY_MONTHS = 4
 # Months of trailing actuals in the naive baseline.
 BASELINE_MONTHS = 3
 
+# How many months ahead of the anchor month the forecast targets. Widened
+# from 1 to 3 once the sheet held enough history for a longer horizon to be
+# worth the wider band.
+FORECAST_HORIZON_MONTHS = 3
+
 # Refuse outright past this span rather than materialising zero-filled months.
 MAX_HISTORY_SPAN_MONTHS = 60
 
@@ -160,7 +165,7 @@ def forecast_next_month(expenses: pd.DataFrame, as_of: str | None = None,
 
     anchor = (pd.Period(pd.Timestamp(as_of), freq="M") if as_of
               else pd.Period(fittable[-1].month, freq="M"))
-    target = anchor + 1
+    target = anchor + FORECAST_HORIZON_MONTHS
 
     # x is the month's offset from the first fitted month, so a gap in the
     # history is a gap on the x-axis rather than a compressed step.
@@ -179,6 +184,12 @@ def forecast_next_month(expenses: pd.DataFrame, as_of: str | None = None,
     variance = sum(r * r for r in residuals) / dof
     residual_std = variance ** 0.5
     rmse = (sum(r * r for r in residuals) / len(residuals)) ** 0.5
+
+    mean_y = sum(y) / len(y)
+    # RMSE relative to the average month fitted, so the miss can be read as a
+    # share of typical spend rather than in currency, and compared across
+    # currencies and categories on the same scale.
+    rmse_pct = None if mean_y == 0 else (rmse / mean_y) * 100
 
     total_ss = sum((value - sum(y) / len(y)) ** 2 for value in y)
     r_squared = (None if total_ss == 0
@@ -233,6 +244,7 @@ def forecast_next_month(expenses: pd.DataFrame, as_of: str | None = None,
                   "months_fitted": len(fittable),
                   "steps_ahead": steps_ahead,
                   "residual_std": round(residual_std, 2),
-                  "rmse": round(rmse, 2)},
+                  "rmse": round(rmse, 2),
+                  "rmse_pct": None if rmse_pct is None else round(rmse_pct, 2)},
         "diagnostics": diagnostics,
     }

@@ -179,7 +179,12 @@ else:
     chart_data.columns = ["decided_at", "amount"]
     st.altair_chart(
         alt.Chart(chart_data).mark_line(point=True).encode(
-            x=alt.X("decided_at:T", title="Decision date"),
+            # An explicit date format, not Vega-Lite's automatic tick unit —
+            # a narrow domain (a currency with only a few rejections close
+            # together) otherwise falls back to an hour-of-day format like
+            # "03 PM", which reads as a time rather than a date.
+            x=alt.X("decided_at:T", title="Decision date",
+                    axis=alt.Axis(format="%d %b %Y", labelAngle=-30)),
             y=alt.Y("amount:Q",
                     title=f"Cumulative leakage prevented ({currency_label(running_total_code)})"),
             tooltip=[alt.Tooltip("decided_at:T", title="Decided on"),

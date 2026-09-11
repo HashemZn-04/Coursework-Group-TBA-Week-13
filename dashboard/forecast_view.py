@@ -3,7 +3,8 @@ import pandas as pd
 import streamlit as st
 
 from api.audit import global_inflation_rates
-from api.forecast import DEFAULT_CATEGORY, forecast_next_month
+from api.forecast import (DEFAULT_CATEGORY, FORECAST_HORIZON_MONTHS,
+                          forecast_next_month)
 from api.summary import format_money
 from dashboard.spend import UNKNOWN_CURRENCY, currency_key
 
@@ -20,7 +21,9 @@ def render_forecast(expenses: pd.DataFrame, currency: str,
                     category: str = DEFAULT_CATEGORY) -> dict:
     label = category.replace("_", " ").lower()
     currency_display = "currency not recorded" if currency == UNKNOWN_CURRENCY else currency
-    st.subheader(f"Next month's {label} spend ({currency_display})")
+    horizon_phrase = ("Next month's" if FORECAST_HORIZON_MONTHS == 1
+                      else f"{FORECAST_HORIZON_MONTHS}-month-ahead")
+    st.subheader(f"{horizon_phrase} {label} spend ({currency_display})")
 
     # Forecast one currency at a time — the model itself refuses on a mixed
     # history rather than summing across currencies, so a currency this page
@@ -35,21 +38,28 @@ def render_forecast(expenses: pd.DataFrame, currency: str,
         st.info(f"**No forecast.** {result['detail']}")
     else:
         code = result["currency"] or currency
-        point, band, baseline = st.columns(3)
+        point, baseline = st.columns(2)
         point.metric(f"Forecast — {result['forecast_month']}",
                      format_money(result["forecast"], code))
-        band.metric("Indicative range",
-                    f"{format_money(result['range']['low'], code)}–{format_money(result['range']['high'], code)}")
         baseline.metric(f"Last {result['baseline']['months']} months, average",
                         format_money(result["baseline"]["value"], code))
+        # Its own full-width row rather than a third column — two currency
+        # amounts joined by an en dash routinely overflow a one-third-width
+        # metric and get truncated.
+        st.metric("Indicative range",
+                 f"{format_money(result['range']['low'], code)} – "
+                 f"{format_money(result['range']['high'], code)}")
 
         model = result["model"]
         rmse_col, r2_col = st.columns(2)
-        rmse_col.metric("Model RMSE", format_money(model["rmse"], code),
+        rmse_display = ("—" if model["rmse_pct"] is None
+                        else f"{model['rmse_pct']:.1f}%")
+        rmse_col.metric("Model RMSE", rmse_display,
                         help="Root-mean-square error of the fitted line "
-                             "against the months it was trained on — the "
-                             "typical size of the model's miss, in the same "
-                             "unit as the forecast.")
+                             "against the months it was trained on, as a "
+                             "share of the average month's spend in the fit "
+                             "— the typical size of the model's miss, "
+                             "comparable across currencies and categories.")
         r2_col.metric("R²", "—" if model["r_squared"] is None
                      else f"{model['r_squared']:.2f}",
                      help="Share of month-to-month variation the trend line "

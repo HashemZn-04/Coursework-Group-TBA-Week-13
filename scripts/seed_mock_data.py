@@ -113,6 +113,38 @@ PROFILES = {
 }
 
 
+# Extra, unstructured cohort layered on top of the trend-based one above: a
+# flat random scatter across a wider span (2024-01 to 2026-12) so there is
+# enough per-currency history — GBP especially — for the 3-month-ahead
+# forecast to fit against.
+EXTRA_MONTHS = [f"{year}-{month:02d}" for year in (2024, 2025, 2026)
+               for month in range(1, 13)]
+
+EXTRA_PER_CURRENCY = 1000
+
+# 2% miscellaneous, 85% of every row (regardless of category) low_risk.
+EXTRA_CATEGORY_WEIGHTS = [
+    (0.02, "miscellaneous"),
+    (0.30, "travel"),
+    (0.15, "accommodation"),
+    (0.40, "subsistence"),
+    (0.13, "client_entertainment"),
+]
+EXTRA_LOW_RISK_SHARE = 0.85
+
+ITEM_LABELS = {"travel": "Fare", "accommodation": "Room", "subsistence": "Meal",
+              "client_entertainment": "Client dinner", "miscellaneous": "Purchase"}
+
+# `miscellaneous` has no merchant table in PROFILES — everything routed there
+# by the trend-based generator above is real travel/stay/food/entertainment
+# spend, deliberately. This cohort is the first to generate it on purpose.
+MISC_MERCHANTS = {
+    "GBP": (["Amazon UK", "WHSmith", "Ryman", "Post Office"], 5, 150),
+    "USD": (["Amazon", "Staples", "Office Depot", "USPS"], 5, 150),
+    "EUR": (["Amazon.de", "Office Depot", "La Poste", "Müller"], 5, 150),
+}
+
+
 def weighted_pick(rng, table):
     r = rng.random()
     cum = 0.0
@@ -220,15 +252,57 @@ def generate_currency(currency, seed):
     return rows
 
 
-def generate(seeds):
+def pick_category(rng):
+    r = rng.random()
+    cum = 0.0
+    for weight, category in EXTRA_CATEGORY_WEIGHTS:
+        cum += weight
+        if r <= cum:
+            return category
+    return EXTRA_CATEGORY_WEIGHTS[-1][1]
+
+
+def generate_extra_random(currency, seed, count=EXTRA_PER_CURRENCY):
+    """Unweighted-by-month scatter across `EXTRA_MONTHS`, independent of the
+    trend cohort above: every one of `count` receipts lands on a uniformly
+    random month and day, `EXTRA_LOW_RISK_SHARE` of them low_risk, ~2%
+    miscellaneous."""
+    profile = PROFILES[currency]
+    rng = random.Random(seed)
+    rows = []
+    for _ in range(count):
+        month = rng.choice(EXTRA_MONTHS)
+        day = rng.randint(1, days_in_month(month))
+        category = pick_category(rng)
+        if category == "miscellaneous":
+            merchants, low, high = MISC_MERCHANTS[currency]
+            merchant, amount = rng.choice(merchants), round(rng.uniform(low, high), 2)
+        else:
+            merchant, amount = weighted_pick(rng, profile[category])
+        verdict = "low_risk" if rng.random() < EXTRA_LOW_RISK_SHARE else "high_risk"
+        rows.append(build_row(rng, month, day, merchant, amount, category,
+                              currency, ITEM_LABELS[category], verdict))
+    return rows
+
+
+def generate(seeds, extra_seeds=None, extra_count=EXTRA_PER_CURRENCY):
+    """`seeds` drives the trend cohort (generate_currency); `extra_seeds`, the
+    random 2024-2026 cohort (generate_extra_random). Pass `extra_seeds={}` (or
+    `extra_count=0`) to skip the extra cohort — e.g. when appending to a sheet
+    that already has the trend cohort seeded and only the extra receipts are
+    wanted, do the reverse and pass `seeds={}`."""
     rows = []
     for currency, seed in seeds.items():
         rows.extend(generate_currency(currency, seed))
+    if extra_count:
+        for currency, seed in (extra_seeds or {}).items():
+            rows.extend(generate_extra_random(currency, seed, count=extra_count))
     rows.sort(key=lambda r: r["created_at"])
     return rows
 
 
 DEFAULT_SEEDS = {"GBP": 102, "USD": 18, "EUR": 26}
+DEFAULT_EXTRA_SEEDS = {"GBP": 202, "USD": 118, "EUR": 126}
 
 
 def main():
@@ -238,10 +312,32 @@ def main():
     parser.add_argument("--seed-gbp", type=int, default=DEFAULT_SEEDS["GBP"])
     parser.add_argument("--seed-usd", type=int, default=DEFAULT_SEEDS["USD"])
     parser.add_argument("--seed-eur", type=int, default=DEFAULT_SEEDS["EUR"])
+    parser.add_argument("--extra-seed-gbp", type=int,
+                        default=DEFAULT_EXTRA_SEEDS["GBP"])
+    parser.add_argument("--extra-seed-usd", type=int,
+                        default=DEFAULT_EXTRA_SEEDS["USD"])
+    parser.add_argument("--extra-seed-eur", type=int,
+                        default=DEFAULT_EXTRA_SEEDS["EUR"])
+    parser.add_argument("--extra-count", type=int, default=EXTRA_PER_CURRENCY,
+                        help="extra 2024-2026 receipts to generate per "
+                             "currency (0 to skip this cohort entirely)")
+    parser.add_argument("--extra-only", action="store_true",
+                        help="skip the trend-based 2025-2026 cohort and "
+                             "write only the extra random one — use this "
+                             "against a sheet that already has the trend "
+                             "cohort seeded, so it isn't duplicated")
+    parser.add_argument("--no-extra", action="store_true",
+                        help="skip the extra random cohort and write only "
+                             "the original trend-based one (old behaviour)")
     args = parser.parse_args()
-    seeds = {"GBP": args.seed_gbp, "USD": args.seed_usd, "EUR": args.seed_eur}
+    seeds = ({} if args.extra_only else
+            {"GBP": args.seed_gbp, "USD": args.seed_usd, "EUR": args.seed_eur})
+    extra_seeds = ({} if args.no_extra else
+                  {"GBP": args.extra_seed_gbp, "USD": args.extra_seed_usd,
+                   "EUR": args.extra_seed_eur})
+    extra_count = 0 if args.no_extra else args.extra_count
 
-    rows = generate(seeds)
+    rows = generate(seeds, extra_seeds, extra_count)
     by_currency = {}
     by_category = {}
     for row in rows:

@@ -93,7 +93,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()
 
-    print("H1 — Next-month travel spend forecast")
+    print("H1 — 3-month-ahead travel spend forecast")
     print("=" * 72)
     print(f"\nas of {AS_OF} · fits at least {MIN_HISTORY_MONTHS} assessed "
           f"months · naive baseline is the trailing {BASELINE_MONTHS}-month "
