@@ -40,30 +40,40 @@ currencies = col4.multiselect(
     "Currency", options=sorted(df["currency"].dropna().unique()), default=None
 )
 
-amounts = df["total"].dropna()
+# Every other filter is applied before the amount slider's bounds are
+# computed, so the slider only ever spans what's actually selectable — e.g.
+# a single JPY receipt for ¥480,000 shouldn't set the ceiling once the
+# Currency filter is narrowed to GBP.
+# st.date_input hands back a 1-tuple mid-selection, so both ends must be
+# present before the range is applied.
+prefiltered = df
+if len(date_range) == 2:
+    prefiltered = prefiltered[prefiltered["date"].notna()
+                              & (prefiltered["date"] >= pd.Timestamp(date_range[0]))
+                              & (prefiltered["date"] <= pd.Timestamp(date_range[1]))]
+if categories:
+    prefiltered = prefiltered[prefiltered["category"].map(normalise_category).isin(categories)]
+if submitters:
+    prefiltered = prefiltered[prefiltered["submitter"].isin(submitters)]
+if currencies:
+    prefiltered = prefiltered[prefiltered["currency"].isin(currencies)]
+
+amounts = prefiltered["total"].dropna()
 if amounts.empty or amounts.min() == amounts.max():
     min_amount, max_amount = float("-inf"), float("inf")
 else:
+    # Keyed on the other filters so the widget re-initialises to the new
+    # full range (rather than keeping a now-stale prior selection) whenever
+    # any of them change.
+    slider_key = f"amount_range_{date_range}_{categories}_{submitters}_{currencies}"
     min_amount, max_amount = st.slider(
         "Amount range",
         float(amounts.min()), float(amounts.max()),
         (float(amounts.min()), float(amounts.max())),
+        key=slider_key,
     )
 
-filtered = df[(df["total"] >= min_amount) & (df["total"] <= max_amount)]
-
-# st.date_input hands back a 1-tuple mid-selection, so both ends must be
-# present before the range is applied.
-if len(date_range) == 2:
-    filtered = filtered[filtered["date"].notna()
-                        & (filtered["date"] >= pd.Timestamp(date_range[0]))
-                        & (filtered["date"] <= pd.Timestamp(date_range[1]))]
-if categories:
-    filtered = filtered[filtered["category"].map(normalise_category).isin(categories)]
-if submitters:
-    filtered = filtered[filtered["submitter"].isin(submitters)]
-if currencies:
-    filtered = filtered[filtered["currency"].isin(currencies)]
+filtered = prefiltered[(prefiltered["total"] >= min_amount) & (prefiltered["total"] <= max_amount)]
 
 st.caption(f"Showing {len(filtered)} of {len(df)} receipts.")
 

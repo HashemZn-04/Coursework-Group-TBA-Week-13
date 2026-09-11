@@ -44,9 +44,24 @@ if queue.empty:
 
 queue = queue.sort_values("date", ascending=False)
 
-st.write(f"**{len(queue)}** awaiting your decision.")
+search = st.text_input(
+    "Search", placeholder="Search by receipt ID, merchant, submitter, or category"
+).strip()
+visible = queue
+if search:
+    haystack = (queue["receipt_id"].astype("string").fillna("") + " "
+               + queue["merchant"].astype("string").fillna("") + " "
+               + queue["submitter"].astype("string").fillna("") + " "
+               + queue["category"].astype("string").fillna(""))
+    visible = queue[haystack.str.contains(search, case=False, na=False)]
 
-for _, row in queue.iterrows():
+if search and visible.empty:
+    st.warning(f"No pending receipts match “{search}”.")
+
+st.write(f"**{len(visible)}** of **{len(queue)}** awaiting your decision."
+        if search else f"**{len(queue)}** awaiting your decision.")
+
+for _, row in visible.iterrows():
     with st.container(border=True):
         st.write(":red[High risk] — needs your decision")
         st.subheader(
