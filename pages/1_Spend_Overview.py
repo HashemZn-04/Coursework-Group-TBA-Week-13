@@ -1,4 +1,5 @@
 import altair as alt
+import pandas as pd
 import streamlit as st
 
 from api.policy import normalise_category
@@ -127,17 +128,18 @@ if velocity_data.empty:
     st.info(f"No receipt in {currency_label(velocity_code)} has a readable date, so "
             f"there is nothing to plot over time.")
 else:
-    velocity_dates = velocity_data.index.to_timestamp()
+    min_date = velocity_data.index.min()
+    max_date = velocity_data.index.max()
     date_range = col2.date_input(
         "Date range",
-        value=(velocity_dates.min(), velocity_dates.max()),
+        value=(min_date, max_date),
         key="velocity_date_range"
     )
 
     timeline = velocity_data
     if len(date_range) == 2:
-        timeline = timeline[(timeline.index.to_timestamp() >= pd.Timestamp(date_range[0]))
-                            & (timeline.index.to_timestamp() <= pd.Timestamp(date_range[1]))]
+        timeline = timeline[(timeline.index >= pd.Timestamp(date_range[0]))
+                            & (timeline.index <= pd.Timestamp(date_range[1]))]
 
     chart_data = timeline.reset_index()
     st.altair_chart(

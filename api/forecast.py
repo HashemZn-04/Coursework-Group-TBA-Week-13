@@ -160,7 +160,7 @@ def forecast_next_month(expenses: pd.DataFrame, as_of: str | None = None,
 
     anchor = (pd.Period(pd.Timestamp(as_of), freq="M") if as_of
               else pd.Period(fittable[-1].month, freq="M"))
-    target = anchor + 3
+    target = anchor + 1
 
     # x is the month's offset from the first fitted month, so a gap in the
     # history is a gap on the x-axis rather than a compressed step.
