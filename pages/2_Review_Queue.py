@@ -68,10 +68,13 @@ for _, row in visible.iterrows():
             f"{row['merchant']} — {format_money(row['total'], row.get('currency'))}")
 
         date = row["date"]
+        submitted_at = row.get("submitted_at")
+        when = (f" at {submitted_at:%Y-%m-%d %H:%M} UTC" if pd.notna(submitted_at)
+                else "")
         st.caption(
-            f"{row['category']} · submitted by {row['submitter']} · "
+            f"{row['category']} · submitted by {row['submitter']}{when} · "
             f"dated {date:%Y-%m-%d}" if pd.notna(date)
-            else f"{row['category']} · submitted by {row['submitter']}"
+            else f"{row['category']} · submitted by {row['submitter']}{when}"
         )
 
         reason = row.get("verdict_reason")

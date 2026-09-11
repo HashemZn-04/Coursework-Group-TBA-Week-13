@@ -104,6 +104,42 @@ def test_receipt_ids_increment_rather_than_colliding(client, sheet_tabs):
         "1", "2"]
 
 
+def test_a_concurrent_id_collision_is_repaired_on_write(sheet_tabs, monkeypatch):
+    """next_id()'s read and insert_receipt()'s append aren't atomic, so two
+    inserts whose reads race can both compute the same id — seen live on the
+    shared sheet. insert_receipt must notice its own write collided and
+    renumber itself rather than leave two rows sharing an id that no
+    decision could be attached to with certainty (the Spend Overview
+    'Data integrity' warning)."""
+    from api import sheets as api_sheets
+
+    # A row already holding id=1, standing in for another insert whose
+    # append had already landed by the time our own (stale) read happened.
+    sheet_tabs["Receipts"].append_row(
+        ["1", "2026-08-01", "Existing", "[]", "10.00", "0", "travel", "GBP",
+         "U1", "", "ref", "approved", "low_risk", "", "", "", ""])
+
+    real_next_id = api_sheets.next_id
+    calls = {"n": 0}
+
+    def racy_next_id(*args, **kwargs):
+        calls["n"] += 1
+        return 1 if calls["n"] == 1 else real_next_id(*args, **kwargs)
+
+    monkeypatch.setattr(api_sheets, "next_id", racy_next_id)
+
+    new_id = api_sheets.insert_receipt({
+        "receipt_date": "2026-08-02", "merchant": "New", "total_amount": 20.0,
+        "currency": "GBP", "category": "travel", "submitter": "U2",
+        "verdict": "low_risk",
+    })
+
+    assert new_id != 1
+    ids = [r["receipt_id"] for r in sheet_tabs["Receipts"].get_all_records()]
+    assert len(ids) == len(set(ids)), f"receipt ids must stay unique: {ids}"
+    assert str(new_id) in ids
+
+
 def test_malformed_ids_already_in_the_sheet_do_not_break_the_next_one(client, sheet_tabs):
     """n8n has written the literal string '=ROW()-1' into receipt_id. Until that
     is fixed upstream, a new insert has to step over it rather than crash."""

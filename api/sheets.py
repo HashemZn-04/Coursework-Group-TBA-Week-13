@@ -88,6 +88,20 @@ def insert_receipt(fields: dict) -> int:
     # as "1/5/26" — 1 May, not 5 January). RAW stores the literal text;
     # numeric columns still come back as numbers regardless.
     ws.append_row([row[h] for h in RECEIPT_HEADERS], value_input_option="RAW")
+
+    # next_id()'s read and this append aren't atomic, so two submissions
+    # landing close together can compute the same id (seen live: two
+    # concurrent inserts both landed on the same id). Re-checking right
+    # after the write and renumbering ourselves if we lost the race is
+    # cheaper than leaving an ambiguous id for the Spend Overview integrity
+    # warning to catch later, with no decision attachable to either row.
+    records = ws.get_all_records(expected_headers=RECEIPT_HEADERS)
+    if sum(1 for r in records if str(r["receipt_id"]) == str(new_id)) > 1:
+        fresh_id = next_id(ws, "receipt_id", RECEIPT_HEADERS)
+        id_col = RECEIPT_HEADERS.index("receipt_id") + 1
+        our_row = len(records) + 1  # +1 for the header; our append is last
+        ws.update_cell(our_row, id_col, fresh_id)
+        return fresh_id
     return new_id
 
 
