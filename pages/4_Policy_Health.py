@@ -34,7 +34,7 @@ assessed = counts[CLEARED] + counts[NEEDS_REVIEW]
 rate = clearance_rate(counts[CLEARED], counts[NEEDS_REVIEW])
 
 
-def rate_text(value: float, base: int) -> str:
+def rate_text(value: float) -> str:
     return "—" if pd.isna(value) else f"{value:.0%}"
 
 
@@ -46,7 +46,7 @@ assessed_tile.metric("Assessed", f"{assessed} of {len(df)}",
                           "has looked at them.")
 assessed_tile.caption(f"{assessed / len(df):.0%} of all receipts")
 
-cleared_tile.metric("Cleared without a human", rate_text(rate, assessed),
+cleared_tile.metric("Cleared without a human", rate_text(rate),
                     help="Share of assessed receipts the engine approved on its "
                          "own. Unassessed receipts are in neither the top nor "
                          "the bottom of this fraction.")

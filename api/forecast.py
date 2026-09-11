@@ -43,8 +43,7 @@ REASONS = {
     "TRAVEL_SPEND_UNPROCESSED":
         "{unassessed} of {found} {category} claims never completed the audit "
         "pipeline, leaving too few assessed months to fit. Those claims are not "
-        "counted as zero spend — nothing assessed them (see the C3 punch list "
-        "in ticket_work/epic_3_tickets.md).",
+        "counted as zero spend — nothing assessed them.",
     "MIXED_CURRENCY_HISTORY":
         "The {category} history is in more than one currency ({currencies}) and "
         "nothing in this pipeline converts between them (Handbook 12.2), so the "

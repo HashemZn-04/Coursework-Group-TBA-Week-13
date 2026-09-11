@@ -14,7 +14,6 @@ st.write(
     "are being broken\n"
     "- **Patterns of Concern** — claims that look like the same claim, filed "
     "more than once or split across people\n\n"
-    "Reads and writes the shared Google Sheet (Receipts / Cluster Reviews "
-    "tabs) — see `ticket_work/epic_3_tickets.md` for the one-time credentials "
-    "setup."
+    "Reads and writes the shared Google Sheet "
+    "— see `README.md` for the one-time credentials setup."
 )

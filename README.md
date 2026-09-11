@@ -63,8 +63,6 @@ longer used and has been removed.
 2. Share the sheet above with the service account's email as an **Editor**.
 3. Copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and paste in the key's fields.
 
-Full click-by-click steps: `ticket_work/epic_3_tickets.md` ("One-time setup" section).
-
 No other credentials are needed. The audit engine's inflation source (the World
 Bank's global consumer-price series) requires no API key and no signup.
 
@@ -227,5 +225,4 @@ scripts/sync_cpi.py    Refreshes the CPI sheet n8n's agent reads
 tests/                 pytest suite (no credentials or network needed)
 data/                  Sample receipts, annotations, SROIE2019 dataset
 discovery_docs/        Project brief, tickets, schema, and workflow docs
-ticket_work/           Epic C ticket guide and session handoff
 ```

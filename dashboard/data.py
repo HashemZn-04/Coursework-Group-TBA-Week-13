@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 from google.oauth2.service_account import Credentials
 
-from api.policy import VERDICT_HIGH, VERDICT_LOW, normalise_verdict
+from api.policy import normalise_verdict
 
 DEFAULT_SPREADSHEET_ID = "1avXBzepTNQXcjl4aHW7ocdLBk5KooPVMw0U1I2uZRoE"
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets",
@@ -29,7 +29,7 @@ def client():
         st.error(
             "Missing Google Sheets credentials. Copy .streamlit/secrets.toml.example to "
             ".streamlit/secrets.toml and fill in your service account key "
-            "(see ticket_work/epic_3_tickets.md, section 'One-time setup')."
+            "(see README.md, section 'One-time credentials setup')."
         )
         st.stop()
     creds = Credentials.from_service_account_info(
