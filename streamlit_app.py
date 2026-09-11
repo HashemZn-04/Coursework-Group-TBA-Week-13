@@ -6,7 +6,8 @@ st.title("CFO Eyes Dashboard")
 st.write(
     "Use the sidebar to navigate:\n\n"
     "- **Spend Overview** — what was claimed, what is at risk, what was "
-    "prevented, spend velocity, and a 3-month-ahead travel forecast\n"
+    "prevented, spend velocity, and a next-month travel forecast (with two "
+    "further months shown for context)\n"
     "- **Review Queue** — high-risk claims awaiting your decision\n"
     "- **Expense Browser** — every claim, filterable\n"
     "- **Policy Health** — how compliance is trending and which handbook rules "

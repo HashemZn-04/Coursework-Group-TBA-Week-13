@@ -1,4 +1,5 @@
-"""H1 — the 3-month-ahead travel spend forecast.
+"""H1 — the next-month-ahead travel spend forecast (plus two further months
+plotted for context, per `FORECAST_HORIZON_MONTHS`).
 
 Two things this file is really testing. First, that the model **refuses by
 name** whenever the data cannot carry a forecast — Amara's stated bar is a tool
@@ -115,26 +116,34 @@ def test_every_return_carries_the_same_keys():
 # The fit
 # --------------------------------------------------------------------------- #
 
-def test_a_rising_history_forecasts_3_months_after_the_anchor():
-    """The forecast reaches 3 months past the anchor, not the month right
-    after the last settled one — the user story is about planning a quarter
-    ahead, not describing the past."""
+def test_a_rising_history_forecasts_1_month_after_the_anchor():
+    """The headline forecast is the focal, 1-month-ahead figure — the
+    dashboard's RMSE/R² and indicative range describe this number, not a
+    quarter out. The 2- and 3-month-ahead points are still produced, in
+    `horizons`, for the chart to plot alongside it."""
     result = forecast_next_month(
         _history(MONTHS, amount=lambda i: 400.0 + 40 * i), as_of="2026-06-20")
 
-    assert result["forecast_month"] == "2026-09"
+    assert result["forecast_month"] == "2026-07"
     assert result["model"]["slope_per_month"] == pytest.approx(40.0)
-    assert result["forecast"] == pytest.approx(760.0)
+    assert result["forecast"] == pytest.approx(680.0)
     assert result["model"]["method"].startswith("sklearn")
+
+    assert [h["months_ahead"] for h in result["horizons"]] == [1, 2, 3]
+    assert [h["forecast_month"] for h in result["horizons"]] == \
+        ["2026-07", "2026-08", "2026-09"]
+    assert result["horizons"][0]["forecast"] == pytest.approx(680.0)
+    assert result["horizons"][1]["forecast"] == pytest.approx(720.0)
+    assert result["horizons"][2]["forecast"] == pytest.approx(760.0)
 
 
 def test_the_forecast_reaches_forward_from_today_not_from_the_last_data_point():
     """History ending in April, asked in June: the anchor is June and the
-    forecast reaches 3 months past it — September, five steps from the last
-    data point — not July, three steps from April."""
+    (focal, 1-month) forecast reaches one month past it — July, three steps
+    from the last data point (April) — not May, one step from April."""
     result = forecast_next_month(_history(MONTHS[:4]), as_of="2026-06-20")
-    assert result["forecast_month"] == "2026-09"
-    assert result["model"]["steps_ahead"] == 5
+    assert result["forecast_month"] == "2026-07"
+    assert result["model"]["steps_ahead"] == 3
 
 
 def test_a_flat_history_forecasts_the_same_number_without_claiming_certainty():
