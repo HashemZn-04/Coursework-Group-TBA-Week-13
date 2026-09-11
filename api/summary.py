@@ -1,28 +1,3 @@
-"""
-C5 — High-risk routing and natural-language summary generation (MCP-31).
-
-Amara's bar for a one-click decision, in her own words: "a lot of the time, it
-can just be a sentence." So the summary this builds leads with the four things
-she needs to see before clicking — what was flagged, why, how much, and who
-submitted it — and only then lists the detail. It is generated deterministically
-from the audit result rather than by a second LLM call: the reasoning has
-already been produced upstream by the governance prompt, and re-generating it
-here would add latency, cost, and a second thing that can hallucinate to a
-sentence that mostly assembles facts we already hold.
-
-Two renderings come out of one call:
-
-* `summary` — plain prose, stored in the Receipts row's `verdict_reason` column
-  and shown in the Streamlit Review Queue. This is the dashboard half of the
-  ticket.
-* `slack_message` — the same content in Slack mrkdwn, returned by `/api/audit`
-  so n8n's Slack node can post it verbatim instead of re-formatting it. This is
-  the Slack half.
-
-Keeping both in one place is the point: the message Amara reads in Slack and the
-one she reads in the dashboard are the same sentence, from the same source.
-"""
-
 try:  # importable both as `api.summary` and as a sibling of `app.py`
     from api.policy import VERDICT_HIGH, VERDICT_LOW
 except ImportError:  # pragma: no cover - exercised only by `python api/app.py`
@@ -30,8 +5,6 @@ except ImportError:  # pragma: no cover - exercised only by `python api/app.py`
 
 CURRENCY_SYMBOLS = {"GBP": "£", "USD": "$", "EUR": "€"}
 
-#: Deterministic flag codes -> what they mean in a sentence a human reads.
-#: Keys match n8n's "Deterministic Policy Checks" node plus the two C4 adds.
 FLAG_DESCRIPTIONS = {
     "EXPENSE_OUTSIDE_ONE_MONTH_CUTOFF":
         "submitted more than a month after the expense date, which policy "
@@ -51,9 +24,6 @@ FLAG_DESCRIPTIONS = {
         "over the category's guideline figure once adjusted for inflation",
 }
 
-#: Two outcomes. `low` is stated as an approval rather than as an absence of
-#: concern, because that is now what it does — the engine has approved it and
-#: nobody else will look at it.
 VERDICT_HEADLINES = {
     VERDICT_HIGH: "Needs your decision",
     VERDICT_LOW: "Auto-approved",
@@ -73,15 +43,12 @@ def format_money(amount, currency: str | None = None) -> str:
 
 
 def describe_flags(flags) -> list[str]:
-    """Deterministic codes become sentences; LLM risk factors pass through."""
     described = []
     for flag in flags or []:
         if not flag:
             continue
         text = FLAG_DESCRIPTIONS.get(flag)
         if text is None:
-            # An LLM-produced risk factor — already free text, keep it verbatim
-            # rather than guessing at a rewrite.
             text = str(flag).strip()
             if not text:
                 continue
@@ -93,13 +60,6 @@ def describe_flags(flags) -> list[str]:
 def build_summary(receipt: dict, verdict: str, flags=None,
                   contextual_summary: str = "", validation: dict | None = None,
                   submitter: str | None = None) -> dict:
-    """Assemble the reviewer-facing summary for one audited receipt.
-
-    `receipt` is the audit engine's receipt object (merchant, transaction_date,
-    total, currency, category). `contextual_summary` is the governance prompt's
-    own one-liner from n8n; it leads the "why" when present, because it is the
-    part that reasons about *this* expense rather than about the rules.
-    """
     receipt = receipt or {}
     merchant = str(receipt.get("merchant") or "Unknown merchant").strip()
     currency = receipt.get("currency")
@@ -124,9 +84,9 @@ def build_summary(receipt: dict, verdict: str, flags=None,
         body.append(str(contextual_summary).strip())
     if reasons:
         if verdict == VERDICT_LOW:
-            body.append("Notes: " + _join(reasons) + ".")
+            body.append("Notes: " + join_reasons(reasons) + ".")
         else:
-            body.append("Flagged because it is " + _join(reasons) + ".")
+            body.append("Flagged because it is " + join_reasons(reasons) + ".")
     elif verdict == VERDICT_LOW:
         body.append("Passed every policy check and was approved automatically. "
                     "No human review was required.")
@@ -148,7 +108,7 @@ def build_summary(receipt: dict, verdict: str, flags=None,
     }
 
 
-def _join(items: list[str]) -> str:
+def join_reasons(items: list[str]) -> str:
     if len(items) == 1:
         return items[0]
     return "; ".join(items[:-1]) + "; and " + items[-1]

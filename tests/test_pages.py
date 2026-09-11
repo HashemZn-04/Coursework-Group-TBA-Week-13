@@ -16,12 +16,12 @@ from streamlit.testing.v1 import AppTest
 from tests.conftest import PAGES
 
 HIGH_RISK_RECEIPT = [1, "2026-08-14", "The Ivy", "[]", 264.0, 24.0,
-                     "client_entertainment", "GBP", "U04ALEX", "b.jpg",
+                     "client_entertainment", "GBP", "U04ALEX", "", "b.jpg",
                      "pending_review", "high_risk",
                      "£264.00 at The Ivy is over the per-head guideline.",
                      "2026-08-14T09:00:00+00:00", "", ""]
 LOW_RISK_RECEIPT = [2, "2026-08-01", "Pret A Manger", "[]", 9.20, 0.0,
-                    "subsistence", "GBP", "U04SAM", "a.jpg", "approved",
+                    "subsistence", "GBP", "U04SAM", "", "a.jpg", "approved",
                     "low_risk", "Auto-approved: within limits.",
                     "2026-08-01T09:00:00+00:00", "", ""]
 
@@ -95,7 +95,7 @@ def test_a_rejection_also_clears_the_queue_and_is_recorded(seeded):
 
 def test_an_unassessed_receipt_is_reported_in_red_rather_than_queued(sheet_tabs):
     unassessed = [1, "2026-08-14", "The Ivy", "[]", 264.0, 24.0,
-                  "client_entertainment", "GBP", "U04ALEX", "b.jpg",
+                  "client_entertainment", "GBP", "U04ALEX", "", "b.jpg",
                   "pending_review", "", "", "2026-08-14T09:00:00+00:00", "", ""]
     sheet_tabs["Receipts"].append_row(unassessed)
     app = run("2_Review_Queue.py")
@@ -140,12 +140,50 @@ def test_two_currencies_are_never_added_together_on_the_page(sheet_tabs):
     sheet_tabs["Receipts"].append_row(HIGH_RISK_RECEIPT)
     sheet_tabs["Receipts"].append_row(
         [2, "2026-08-01", "Delta Airlines", "[]", 450.0, 0.0, "travel", "USD",
-         "j.chen", "", "approved", "low_risk", "Fine",
+         "j.chen", "", "", "approved", "low_risk", "Fine",
          "2026-08-01T09:00:00+00:00", "", ""])
 
-    values = [metric.value for metric in run("1_Spend_Overview.py").metric]
-    assert "£264.00" in values and "$450.00" in values
-    assert not any("714" in value for value in values)
+    # The summary section shows one currency at a time now, defaulting to
+    # GBP — switching its dropdown is how a reviewer sees the other one.
+    app = run("1_Spend_Overview.py")
+    gbp_values = [metric.value for metric in app.metric]
+    assert "£264.00" in gbp_values and "$450.00" not in gbp_values
+
+    app.selectbox(key="currency_summary").select("USD").run()
+    usd_values = [metric.value for metric in app.metric]
+    assert "$450.00" in usd_values and "£264.00" not in usd_values
+    assert not any("714" in value for value in gbp_values + usd_values)
+
+
+def test_the_currency_dropdown_defaults_to_gbp_when_present(sheet_tabs):
+    sheet_tabs["Receipts"].append_row(HIGH_RISK_RECEIPT)
+    sheet_tabs["Receipts"].append_row(
+        [2, "2026-08-01", "Delta Airlines", "[]", 450.0, 0.0, "travel", "USD",
+         "j.chen", "", "", "approved", "low_risk", "Fine",
+         "2026-08-01T09:00:00+00:00", "", ""])
+
+    app = run("1_Spend_Overview.py")
+    for key in ("currency_summary", "currency_velocity",
+                "currency_running_total", "currency_category"):
+        assert app.selectbox(key=key).value == "GBP"
+
+
+def test_each_spend_overview_section_has_its_own_currency_dropdown(sheet_tabs):
+    sheet_tabs["Receipts"].append_row(HIGH_RISK_RECEIPT)
+    sheet_tabs["Receipts"].append_row(
+        [2, "2026-08-01", "Delta Airlines", "[]", 450.0, 0.0, "travel", "USD",
+         "j.chen", "", "", "approved", "low_risk", "Fine",
+         "2026-08-01T09:00:00+00:00", "", ""])
+
+    app = run("1_Spend_Overview.py")
+    for key in ("currency_summary", "currency_velocity",
+                "currency_running_total", "currency_category"):
+        assert set(app.selectbox(key=key).options) == {"GBP", "USD"}
+
+    # Switching one dropdown leaves the others on their own selection.
+    app.selectbox(key="currency_velocity").select("USD").run()
+    assert app.selectbox(key="currency_summary").value == "GBP"
+    assert app.selectbox(key="currency_velocity").value == "USD"
 
 
 # --------------------------------------------------------------------------- #
@@ -169,12 +207,12 @@ def test_policy_health_does_not_count_an_unassessed_receipt_as_compliant(sheet_t
     for index in range(1, 6):
         sheet_tabs["Receipts"].append_row(
             [index, "2026-08-14", "Pret", "[]", 9.20, 0.0, "subsistence", "GBP",
-             "U04SAM", "a.jpg", "approved", "low_risk", "Fine",
+             "U04SAM", "", "a.jpg", "approved", "low_risk", "Fine",
              "2026-08-14T09:00:00+00:00", "", ""])
     for index in range(6, 9):
         sheet_tabs["Receipts"].append_row(
             [index, "2026-08-14", "Pret", "[]", 9.20, 0.0, "subsistence", "GBP",
-             "U04SAM", "a.jpg", "pending_review", "", "",
+             "U04SAM", "", "a.jpg", "pending_review", "", "",
              "2026-08-14T09:00:00+00:00", "", ""])
 
     app = run("4_Policy_Health.py")
@@ -205,7 +243,7 @@ def walmart(sheet_tabs):
              ("WAL-MART", "U0B5M5WBV16"), ("Walmart", "U0B5M5WBV16")], start=1):
         sheet_tabs["Receipts"].append_row(
             [index, "08/20/10 13:12:01", merchant, "[]", 5.11, 0.0,
-             "subsistence", "USD", submitter, "F0C0", "pending_review",
+             "subsistence", "USD", submitter, "", "F0C0", "pending_review",
              "", "", "2026-09-09T12:00:00Z", "", ""])
     return sheet_tabs
 

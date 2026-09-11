@@ -56,7 +56,7 @@ PATTERN_LABELS = {
 }
 
 
-def _render(pattern, already_reviewed: bool):
+def render_pattern(pattern, already_reviewed: bool):
     identity = pattern_identity(pattern.receipt_ids)
     label, explanation = PATTERN_LABELS[pattern.pattern]
     with st.container(border=True):
@@ -103,7 +103,7 @@ def _render(pattern, already_reviewed: bool):
 
 
 for pattern in to_review:
-    _render(pattern, pattern_identity(pattern.receipt_ids) in reviewed)
+    render_pattern(pattern, pattern_identity(pattern.receipt_ids) in reviewed)
 
 if immaterial:
     with st.expander(f"{len(immaterial)} group(s) below the materiality floor"):

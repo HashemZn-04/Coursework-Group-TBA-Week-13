@@ -1,33 +1,14 @@
-"""
-H2 — the forecast on the dashboard (stretch goal, P2).
-
-"Dashboard shows a forecasted next-month travel spend figure alongside
-historical actuals". The ticket's own suggestion is "a forecast line alongside
-actual spend in E2", so this renders as a section of Spend Overview rather than
-a page of its own — a forecast belongs next to the actuals it extends.
-
-Everything numeric comes from `api.forecast`; this file only decides how to say
-it. In particular, when the model refuses it prints the model's own sentence.
-Amara's complaint about the last tool she was sold was that it made her wait and
-then told her nothing useful — so a refusal here is immediate, names what is
-missing, and still draws whatever history exists.
-"""
-
+import altair as alt
 import pandas as pd
 import streamlit as st
 
 from api.audit import global_inflation_rates
 from api.forecast import DEFAULT_CATEGORY, forecast_next_month
 from api.summary import format_money
+from dashboard.spend import UNKNOWN_CURRENCY, currency_key
 
 
-def _latest_inflation() -> float | None:
-    """Latest published annual global inflation, or None if unavailable.
-
-    `global_inflation_rates` is `lru_cache`d and falls back to a pinned snapshot
-    when the World Bank cannot be reached, so this costs at most one HTTP call
-    per process and never fails the page.
-    """
+def latest_inflation() -> float | None:
     try:
         rates, _ = global_inflation_rates()
     except Exception:  # pragma: no cover - the helper already has a fallback
@@ -37,12 +18,17 @@ def _latest_inflation() -> float | None:
 
 def render_forecast(expenses: pd.DataFrame, currency: str,
                     category: str = DEFAULT_CATEGORY) -> dict:
-    """Draw the forecast section. Returns the model's result for testability."""
     label = category.replace("_", " ").lower()
-    st.subheader(f"Next month's {label} spend")
+    currency_display = "currency not recorded" if currency == UNKNOWN_CURRENCY else currency
+    st.subheader(f"Next month's {label} spend ({currency_display})")
 
-    result = forecast_next_month(expenses, category=category,
-                                 inflation_pct=_latest_inflation())
+    # Forecast one currency at a time — the model itself refuses on a mixed
+    # history rather than summing across currencies, so a currency this page
+    # has already decided to look at should never reach it as a mix.
+    single_currency = expenses[expenses["currency"].map(currency_key)
+                               == currency_key(currency)]
+    result = forecast_next_month(single_currency, category=category,
+                                 inflation_pct=latest_inflation())
     history = pd.DataFrame(result["history"])
 
     if result["forecast"] is None:
@@ -57,6 +43,20 @@ def render_forecast(expenses: pd.DataFrame, currency: str,
                     f"{format_money(result['range']['high'], code)}")
         baseline.metric(f"Last {result['baseline']['months']} months, average",
                         format_money(result["baseline"]["value"], code))
+
+        model = result["model"]
+        rmse_col, r2_col = st.columns(2)
+        rmse_col.metric("Model RMSE", format_money(model["rmse"], code),
+                        help="Root-mean-square error of the fitted line "
+                             "against the months it was trained on — the "
+                             "typical size of the model's miss, in the same "
+                             "unit as the forecast.")
+        r2_col.metric("R²", "—" if model["r_squared"] is None
+                     else f"{model['r_squared']:.2f}",
+                     help="Share of month-to-month variation the trend line "
+                          "explains. Blank when there is no variance to "
+                          "explain (a perfectly flat history).")
+
         st.caption(f"{result['detail']} {result['range']['basis']}")
         if result["inflation"]:
             st.caption(
@@ -69,14 +69,24 @@ def render_forecast(expenses: pd.DataFrame, currency: str,
             )
 
     if not history.empty:
-        # Censored months are drawn as zero because a bar chart has nowhere else
-        # to put them, so they are named underneath rather than left to look
-        # like quiet months.
+        # Censored months are drawn as zero because a bar chart has nowhere
+        # else to put them, and named in the caption below.
         chart = history.set_index("month")["spend"]
         if result["forecast"] is not None:
             chart = pd.concat(
                 [chart, pd.Series({result["forecast_month"]: result["forecast"]})])
-        st.bar_chart(chart)
+        chart_data = chart.reset_index()
+        chart_data.columns = ["month", "spend"]
+        st.altair_chart(
+            alt.Chart(chart_data).mark_bar().encode(
+                x=alt.X("month:N", title="Month", sort=None,
+                        axis=alt.Axis(labelAngle=-20)),
+                y=alt.Y("spend:Q", title=f"Spend ({label})"),
+                tooltip=[alt.Tooltip("month:N", title="Month"),
+                         alt.Tooltip("spend:Q", title="Spend", format=",.2f")],
+            ),
+            use_container_width=True,
+        )
         censored = int((history["state"] == "censored").sum())
         empty = int((history["state"] == "empty").sum())
         parts = [f"Monthly {label} actuals"]

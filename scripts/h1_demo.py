@@ -1,21 +1,6 @@
 #!/usr/bin/env python3
-"""H1 acceptance evidence — the travel forecast, run against constructed data.
-
+"""
     python scripts/h1_demo.py
-
-The acceptance criterion asks for a model that "produces a next-month forecast
-with a documented method [...] and a sanity-checked output range". It cannot be
-demonstrated against the live sheet, and that is the point worth stating in the
-ticket rather than hiding: **the sheet holds one travel receipt, and it has no
-verdict**, so there is no history to fit. The first scenario below is exactly
-that shape, and the model refuses by name instead of inventing a number.
-
-The remaining scenarios are constructed histories that show the model working,
-the naive baseline QA's H3 ticket will compare it against, and each refusal path
-with the sentence a reviewer would actually see.
-
-Exits non-zero if any scenario does not behave as stated, so this is evidence
-when it passes and a failing check when it does not. Paste the output into H1.
 """
 
 import argparse
@@ -29,24 +14,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from api.forecast import (BASELINE_MONTHS, MIN_HISTORY_MONTHS,  # noqa: E402
                           forecast_next_month)
 from api.summary import format_money  # noqa: E402
-from dashboard.data import _parse_dates, _parse_timestamps  # noqa: E402
+from dashboard.data import parse_dates, parse_timestamps  # noqa: E402
 
 #: Held fixed rather than read from the clock, so the printed output is the same
 #: artifact every time it is run.
 AS_OF = "2026-09-10"
 
-#: Latest published global annual inflation (World Bank world aggregate, 2025),
-#: passed in rather than fetched so this script needs no network either.
+#: Latest published global annual inflation (World Bank world aggregate, 2025).
 INFLATION_PCT = 3.0414132155654
 
 
 def receipts(rows):
-    """A frame shaped like `dashboard.data.load_expenses()` returns one."""
     df = pd.DataFrame(rows, columns=[
         "receipt_id", "receipt_date", "merchant", "total_amount", "category",
         "currency", "submitter", "created_at", "verdict"])
-    df["date"] = _parse_dates(df["receipt_date"])
-    df["submitted_at"] = _parse_timestamps(df["created_at"])
+    df["date"] = parse_dates(df["receipt_date"])
+    df["submitted_at"] = parse_timestamps(df["created_at"])
     df["total"] = pd.to_numeric(df["total_amount"], errors="coerce")
     df["receipt_id"] = df["receipt_id"].astype("Int64")
     df["line_items"] = [[] for _ in range(len(df))]
@@ -54,7 +37,7 @@ def receipts(rows):
     return df
 
 
-def history(amounts, category="travel", currency="GBP", verdict="low",
+def history(amounts, category="travel", currency="GBP", verdict="low_risk",
             start_month=1):
     return receipts([
         (index, f"2026-{start_month + offset:02d}-15", "Delta Airlines", amount,
@@ -71,7 +54,7 @@ SCENARIOS = [
 
     ("No travel claims at all",
      receipts([(1, "2026-08-01", "Pret A Manger", 9.20, "subsistence", "GBP",
-                "u.one", "2026-08-01T12:00:00Z", "low")]),
+                "u.one", "2026-08-01T12:00:00Z", "low_risk")]),
      "NO_TRAVEL_SPEND"),
 
     (f"Three assessed months — one short of the {MIN_HISTORY_MONTHS} the model "
@@ -99,9 +82,9 @@ SCENARIOS = [
 
     ("The SROIE sample's sixteen-year span",
      receipts([(1, "08/20/10 13:12:01", "Delta", 500.0, "travel", "GBP",
-                "j.chen", "2026-09-01T09:00:00+00:00", "low"),
+                "j.chen", "2026-09-01T09:00:00+00:00", "low_risk"),
                (2, "2026-08-01", "Delta", 500.0, "travel", "GBP", "j.chen",
-                "2026-09-01T09:00:00+00:00", "low")]),
+                "2026-09-01T09:00:00+00:00", "low_risk")]),
      "SPAN_TOO_WIDE"),
 ]
 
@@ -146,7 +129,8 @@ def main():
             print(f"       {model['method']}: slope "
                   f"{model['slope_per_month']:+,.2f}/month, "
                   f"intercept {model['intercept']:,.2f}, "
-                  f"r² {model['r_squared']}, residual sd "
+                  f"r² {model['r_squared']}, RMSE "
+                  f"{format_money(model['rmse'], money)}, residual sd "
                   f"{model['residual_std']:,.2f}, "
                   f"{model['months_fitted']} months fitted, "
                   f"{model['steps_ahead']} step(s) ahead")

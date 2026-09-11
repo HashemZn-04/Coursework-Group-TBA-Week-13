@@ -32,8 +32,7 @@ assessed = counts[CLEARED] + counts[NEEDS_REVIEW]
 rate = clearance_rate(counts[CLEARED], counts[NEEDS_REVIEW])
 
 
-def _rate_text(value: float, base: int) -> str:
-    """A percentage, or a dash when the base is too small to state one."""
+def rate_text(value: float, base: int) -> str:
     return "—" if pd.isna(value) else f"{value:.0%}"
 
 
@@ -45,7 +44,7 @@ assessed_tile.metric("Assessed", f"{assessed} of {len(df)}",
                           "has looked at them.")
 assessed_tile.caption(f"{assessed / len(df):.0%} of all receipts")
 
-cleared_tile.metric("Cleared without a human", _rate_text(rate, assessed),
+cleared_tile.metric("Cleared without a human", rate_text(rate, assessed),
                     help="Share of assessed receipts the engine approved on its "
                          "own. Unassessed receipts are in neither the top nor "
                          "the bottom of this fraction.")
@@ -84,10 +83,6 @@ if counts[UNRECOGNISED]:
         f"still adds up; fix the value in the Receipts tab."
     )
 
-# ------------------------------------------------------------------------- #
-# The trend — this is E3's acceptance criterion
-# ------------------------------------------------------------------------- #
-
 st.subheader("Policy health over time")
 
 trend = compliance_trend(df)
@@ -102,7 +97,6 @@ else:
             + ". Read this as a composition, not a trend."
         )
     chart = trend[list(STATES)].rename(columns=STATE_LABELS)
-    # Drop the states nothing is in, so the legend carries only what is drawn.
     chart = chart.loc[:, chart.sum() > 0]
     st.bar_chart(chart)
     st.caption(
@@ -128,10 +122,6 @@ else:
         f"in the month were assessed — a percentage over a base of one or two "
         f"is noise, not a trend."
     )
-
-# ------------------------------------------------------------------------- #
-# Most-broken rules
-# ------------------------------------------------------------------------- #
 
 st.subheader("Most-broken rules")
 
@@ -186,10 +176,6 @@ else:
         "supplies, postage and miscellaneous have no numeric ceiling — they are "
         "governed by the approval thresholds instead."
     )
-
-# ------------------------------------------------------------------------- #
-# Where the problems sit
-# ------------------------------------------------------------------------- #
 
 st.subheader("By category")
 st.dataframe(

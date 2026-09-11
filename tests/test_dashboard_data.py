@@ -17,11 +17,11 @@ def _seed(tabs, receipts=()):
 
 
 RECEIPT_1 = [1, "2026-08-14", "The Ivy", '[{"description": "Dinner", "amount": 264, "quantity": 3}]',
-             264.00, 24.00, "client_entertainment", "GBP", "U04ALEX", "b.jpg",
+             264.00, 24.00, "client_entertainment", "GBP", "U04ALEX", "", "b.jpg",
              "pending_review", "high_risk", "Over the per-head guideline",
              "", "", ""]
 RECEIPT_2 = [2, "2026-08-01", "Pret", "[]", 9.20, 0, "subsistence", "GBP",
-             "U04SAM", "a.jpg", "approved", "low_risk", "Within limits",
+             "U04SAM", "", "a.jpg", "approved", "low_risk", "Within limits",
              "", "", ""]
 
 
@@ -40,7 +40,7 @@ def test_receipt_without_a_verdict_still_appears(sheet_tabs):
     """A gap in the pipeline means a receipt can land with no verdict yet. It
     must still show up in the browser and the spend totals, not vanish."""
     unassessed = [3, "2026-08-02", "Uber", "[]", 18.0, 0, "travel", "GBP",
-                  "U04SAM", "c.jpg", "pending_review", "", "", "", "", ""]
+                  "U04SAM", "", "c.jpg", "pending_review", "", "", "", "", ""]
     _seed(sheet_tabs, receipts=[RECEIPT_1, unassessed])
     df = data.load_expenses()
     assert len(df) == 2
@@ -50,18 +50,18 @@ def test_receipt_without_a_verdict_still_appears(sheet_tabs):
 def test_malformed_line_items_degrade_to_an_empty_list(sheet_tabs):
     _seed(sheet_tabs, receipts=[
         [1, "2026-08-14", "A", "not json at all", 10, 0, "travel",
-            "GBP", "U", "r", "approved", "", "", "", "", ""],
+            "GBP", "U", "", "r", "approved", "", "", "", "", ""],
         [2, "2026-08-14", "B", '{"not": "a list"}', 10, 0, "travel",
-            "GBP", "U", "r", "approved", "", "", "", "", ""],
+            "GBP", "U", "", "r", "approved", "", "", "", "", ""],
         [3, "2026-08-14", "C", "", 10, 0, "travel", "GBP",
-            "U", "r", "approved", "", "", "", "", ""],
+            "U", "", "r", "approved", "", "", "", "", ""],
     ])
     assert data.load_receipts()["line_items"].tolist() == [[], [], []]
 
 
 def test_unreadable_dates_and_totals_become_na_not_exceptions(sheet_tabs):
     _seed(sheet_tabs, receipts=[
-        [1, "not a date", "A", "[]", "not a number", 0, "travel", "GBP", "U", "r",
+        [1, "not a date", "A", "[]", "not a number", 0, "travel", "GBP", "U", "", "r",
          "approved", "", "", "", "", ""]])
     row = data.load_receipts().iloc[0]
     assert pd.isna(row["date"]) and pd.isna(row["total"])
@@ -115,11 +115,11 @@ def test_receipt_dates_in_different_formats_all_parse(sheet_tabs):
     """
     _seed(sheet_tabs, receipts=[
         [1, "2026-08-01", "Delta Airlines", "[]", 450, 0, "travel",
-            "USD", "j.chen", "a", "approved", "", "", "", "", ""],
+            "USD", "j.chen", "", "a", "approved", "", "", "", "", ""],
         [2, "08/20/10 13:12:01", "WAL*MART", "[]", 5.11, 0, "office_supplies",
-            "USD", "j.chen", "b", "approved", "", "", "", "", ""],
+            "USD", "j.chen", "", "b", "approved", "", "", "", "", ""],
         [3, "2026-08-14", "The Ivy", "[]", 264, 24, "client_entertainment",
-            "GBP", "a.okafor", "c", "approved", "", "", "", "", ""],
+            "GBP", "a.okafor", "", "c", "approved", "", "", "", "", ""],
     ])
     dates = data.load_receipts()["date"]
 
@@ -127,13 +127,29 @@ def test_receipt_dates_in_different_formats_all_parse(sheet_tabs):
     assert dates.iloc[1] == pd.Timestamp("2010-08-20 13:12:01")
 
 
+def test_receipt_dates_read_dd_mm_yyyy_not_mm_dd_yyyy(sheet_tabs):
+    """The Receipts tab is now standardised on DD/MM/YYYY. `03/09/2026` must
+    read as 3 September, not March, and an ISO row alongside it must still
+    parse correctly (dayfirst reordering must not leak into ISO dates)."""
+    _seed(sheet_tabs, receipts=[
+        [1, "03/09/2026", "Delta Airlines", "[]", 450, 0, "travel",
+            "USD", "j.chen", "", "a", "approved", "", "", "", "", ""],
+        [2, "2026-08-01", "The Ivy", "[]", 264, 24, "client_entertainment",
+            "GBP", "a.okafor", "", "c", "approved", "", "", "", "", ""],
+    ])
+    dates = data.load_receipts()["date"]
+
+    assert dates.iloc[0] == pd.Timestamp("2026-09-03")
+    assert dates.iloc[1] == pd.Timestamp("2026-08-01")
+
+
 def test_a_genuinely_unreadable_date_is_still_na(sheet_tabs):
     """Tolerating mixed formats must not turn into accepting anything."""
     _seed(sheet_tabs, receipts=[
         [1, "2026-08-01", "A", "[]", 10, 0, "travel", "GBP",
-            "u", "r", "approved", "", "", "", "", ""],
+            "u", "", "r", "approved", "", "", "", "", ""],
         [2, "not a date", "B", "[]", 10, 0, "travel", "GBP",
-            "u", "r", "approved", "", "", "", "", ""],
+            "u", "", "r", "approved", "", "", "", "", ""],
     ])
     dates = data.load_receipts()["date"]
     assert dates.notna().iloc[0] and pd.isna(dates.iloc[1])
@@ -150,13 +166,13 @@ def test_legacy_verdicts_are_normalised_on_read(sheet_tabs):
     high_risk, because it always meant "a human needs to look at this" and
     folding it down would auto-approve it retroactively."""
     legacy_flagged = [1, "2026-08-14", "The Ivy", "[]", 264.00, 24.00,
-                      "client_entertainment", "GBP", "U04ALEX", "b.jpg",
+                      "client_entertainment", "GBP", "U04ALEX", "", "b.jpg",
                       "pending_review", "flagged", "Legacy middle tier", "", "", ""]
     legacy_compliant = [2, "2026-08-01", "Pret", "[]", 9.20, 0, "subsistence",
-                        "GBP", "U04SAM", "a.jpg", "approved", "compliant",
+                        "GBP", "U04SAM", "", "a.jpg", "approved", "compliant",
                         "Legacy clean", "", "", ""]
     legacy_low = [3, "2026-08-01", "Pret", "[]", 9.20, 0, "subsistence",
-                  "GBP", "U04SAM", "a.jpg", "approved", "low",
+                  "GBP", "U04SAM", "", "a.jpg", "approved", "low",
                   "Old two-tier vocabulary", "", "", ""]
     _seed(sheet_tabs, receipts=[legacy_flagged, legacy_compliant, legacy_low])
     df = data.load_expenses().set_index("receipt_id")
@@ -173,7 +189,7 @@ def test_the_submission_time_is_readable_alongside_the_receipt_date(sheet_tabs):
     a tz-aware one raises rather than degrading."""
     _seed(sheet_tabs, receipts=[
         [1, "08/20/10 13:12:01", "WAL*MART", "[]", 5.11, 0, "subsistence", "USD",
-         "U0B4SSV8YJE", "F0C0", "pending_review", "", "",
+         "U0B4SSV8YJE", "", "F0C0", "pending_review", "", "",
          "2026-09-09T12:16:44.931Z", "", ""]])
     row = data.load_receipts().iloc[0]
 

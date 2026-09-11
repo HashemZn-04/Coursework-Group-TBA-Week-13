@@ -1,69 +1,19 @@
-"""
-Handbook-derived spend limits — the *static* half of C4 (MCP-27).
-
-Every figure here traces to a section of `discovery_docs/MCG_expense_policy_final_2.md`
-(the 2019 handbook plus its addenda) or to a figure Amara confirmed live in the
-stakeholder interview (`discovery_docs/transcript.md`). Each limit carries the
-period it was last set in, because C4's whole point is that a 2019 figure is not
-a 2026 figure: `api.audit` re-prices these against CPI before comparing them to a
-receipt.
-
-Two provenance notes worth keeping straight:
-
-* Addendum B (January 2022) uplifted subsistence (3.1), mileage (4.4) and staff
-  entertainment (6.2) by 15%. Addendum C clarified the uplift applies to the
-  original 2019 base figures, not to already-London-weighted ones. So those
-  limits are stored post-uplift with a 2022-01 base period. Addendum B
-  explicitly did *not* uplift client entertainment (5.2), which therefore keeps
-  its 2019-03 base — it is the staleset figure in the book and the one most
-  likely to produce a "good deal" reading.
-* The approval thresholds in Section 9.1 (£250 / £1,000) are superseded by what
-  Amara actually enforces: £250 line-manager, £2,000 CFO ("the CFO approval used
-  to be over a thousand. It's over two thousand now"). Those are current figures,
-  not stale ones, so they are *not* inflation-adjusted — they are gates, not
-  price ceilings. They live here for traceability; n8n's "Deterministic Policy
-  Checks" node is what actually enforces them.
-
-These limits are GBP, and they are re-priced against a single global inflation
-series rather than a per-country one (see `api.audit`). That is deliberate and
-worth being able to defend: what gets re-priced is Meridian's own firm-wide
-limit, not the local price of the thing bought, so one inflation number is the
-right shape for the problem — a £75-a-head limit is £75 a head whether the
-dinner was in Berlin or Bristol. It also means no per-country routing and no API
-key. The cost is that the global series is annual and roughly a year in arrears;
-`api.audit` documents that in full.
-"""
-
 from dataclasses import dataclass
 
 REPORTING_CURRENCY = "GBP"
 
-# --------------------------------------------------------------------------- #
-# Verdict vocabulary
-# --------------------------------------------------------------------------- #
-# Two outcomes, not three. `low_risk` is auto-approved by the engine and never
-# reaches a human; `high_risk` is the review queue. The middle tier ("flagged",
-# needing an employee explanation) was removed on 2026-09-09 — an expense either
-# clears on its own or it needs Amara.
-#
-# The consequence worth being deliberate about: anything the engine is not
-# confident about must land in `high_risk`, because `low_risk` now carries an
-# automatic approval rather than merely an absence of concern. n8n still emits
-# three risk levels to drive its three Slack messages, and MEDIUM maps to
-# `high_risk` for exactly that reason.
-#
-# There is no separate Decisions tab any more: `status` on the Receipts row
-# itself (`pending_review` -> `approved`/`rejected`) is the decision outcome,
-# so nothing here attributes a decision to anyone.
+# Two outcomes, not three. low_risk auto-approves and never reaches a human;
+# high_risk goes to the review queue. n8n's MEDIUM risk level maps to
+# high_risk for the same reason. status on the Receipts row (pending_review ->
+# approved/rejected) is the decision outcome; there is no separate Decisions
+# tab.
 
 VERDICT_LOW = "low_risk"
 VERDICT_HIGH = "high_risk"
 VERDICTS = (VERDICT_LOW, VERDICT_HIGH)
 
-#: Rows written before the three-tier model was collapsed, plus rows written
-#: under the old two-tier vocabulary (`low`). `flagged` folds up rather than
-#: down, matching the MEDIUM rule above: it always meant "a human needs to look
-#: at this", and there is no longer anywhere else for that to go.
+# Legacy vocabulary, normalised on read. "flagged" folds up to high_risk: it
+# always meant "a human needs to look at this".
 LEGACY_VERDICTS = {
     "compliant": VERDICT_LOW,
     "flagged": VERDICT_HIGH,
@@ -72,16 +22,6 @@ LEGACY_VERDICTS = {
 
 
 def normalise_verdict(value: str | None) -> str | None:
-    """Map any stored verdict onto the current two-value vocabulary.
-
-    Returns None only for an empty/absent verdict, which is not a third
-    outcome: the pipeline terminates in `low` or `high_risk` for every receipt
-    it processes. A missing verdict means the receipt never completed the
-    pipeline — a processing failure to surface and fix, never something to
-    quietly resolve into either bucket. Guessing `low` would approve an expense
-    nothing ever assessed; guessing `high_risk` would put unassessed noise in
-    front of the only approver in the company.
-    """
     if value is None:
         return None
     key = str(value).strip().lower()
@@ -92,11 +32,8 @@ def normalise_verdict(value: str | None) -> str | None:
     return LEGACY_VERDICTS.get(key, key)
 
 
-#: Addendum B's cost-of-living uplift, applied January 2022.
 ADDENDUM_B_UPLIFT = 1.15
 
-#: Period a figure was last set in. Stored as a month start for readability;
-#: only the year is used, since the global inflation series is annual.
 HANDBOOK_ISSUE = "2019-03-01"
 ADDENDUM_A_ISSUE = "2020-04-01"
 ADDENDUM_B_ISSUE = "2022-01-01"
@@ -104,20 +41,8 @@ ADDENDUM_B_ISSUE = "2022-01-01"
 
 @dataclass(frozen=True)
 class Limit:
-    """One numeric ceiling from the handbook.
-
-    `basis` says what the amount is measured against, which decides what C4
-    divides the receipt total by before comparing:
-
-    * ``per_claim``  — the whole claim (default)
-    * ``per_head``   — divide by attendee count
-    * ``per_day``    — divide by number of days claimed
-    * ``per_month``  — a recurring monthly charge per licence
-
-    `hard` distinguishes a ceiling from a guideline. Section 5.2 is explicit that
-    client entertainment figures are "guidelines rather than hard limits"; going
-    over one is a conversation, not a violation, so C4 reports it as such.
-    """
+    """basis: per_claim (default) / per_head / per_day / per_month.
+    hard=False means a guideline (5.2), not a ceiling."""
 
     category: str
     amount: float
@@ -128,7 +53,6 @@ class Limit:
     note: str = ""
 
 
-#: Keyed by the category enum n8n's "AI Contextual Audit" node returns.
 CATEGORY_LIMITS: dict[str, Limit] = {
     "SUBSISTENCE": Limit(
         category="SUBSISTENCE",
@@ -150,8 +74,7 @@ CATEGORY_LIMITS: dict[str, Limit] = {
     ),
     "STAFF_ENTERTAINMENT": Limit(
         category="STAFF_ENTERTAINMENT",
-        # £40/head routine social, +15%
-        amount=round(40 * ADDENDUM_B_UPLIFT, 2),
+        amount=round(40 * ADDENDUM_B_UPLIFT, 2),  # £40/head routine social, +15%
         basis="per_head",
         base_period=ADDENDUM_B_ISSUE,
         source="Handbook 6.2 (routine team social, per head), uplifted 15% by Addendum B",
@@ -179,9 +102,8 @@ CATEGORY_LIMITS: dict[str, Limit] = {
     ),
 }
 
-#: Categories the handbook sets no numeric ceiling for — Travel, Accommodation,
-#: Training, Office Supplies, Postage, Miscellaneous, Other. These fall back to
-#: the general approval thresholds below rather than to a price comparison.
+# Categories the handbook sets no numeric ceiling for; fall back to the
+# general approval thresholds below.
 UNCAPPED_CATEGORIES = (
     "TRAVEL",
     "ACCOMMODATION",
@@ -192,52 +114,36 @@ UNCAPPED_CATEGORIES = (
     "OTHER",
 )
 
-#: Per-meal breakdown behind the SUBSISTENCE daily total (3.1, +Addendum B).
 MEAL_LIMITS: dict[str, float] = {
     "breakfast": round(12 * ADDENDUM_B_UPLIFT, 2),
     "lunch": round(15 * ADDENDUM_B_UPLIFT, 2),
     "dinner": round(25 * ADDENDUM_B_UPLIFT, 2),
 }
 
-#: Current, confirmed by Amara — not handbook figures, not inflation-adjusted.
+# Current, confirmed by Amara — not handbook figures, not inflation-adjusted.
 APPROVAL_THRESHOLDS = {
     "line_manager": 250.0,
     "cfo": 2000.0,
 }
 
-#: What the 2019 handbook said, kept for the "policy decay" story in the brief.
+# What the 2019 handbook said, kept for the "policy decay" story in the brief.
 HANDBOOK_APPROVAL_THRESHOLDS = {
     "line_manager": 250.0,
     "head_of_finance": 1000.0,
 }
 
-#: Miscellaneous claims at or above this need a written justification (2.2).
 MISC_JUSTIFICATION_THRESHOLD = 30.0
-
-#: An itemised receipt is required at or above this (8.1).
 RECEIPT_REQUIRED_THRESHOLD = 25.0
-
-#: Claims submitted more than this many days after the expense are auto-rejected.
-#: Amara, asked whether to keep or tighten it: "a month feels good [...] they can
-#: do it inside a month, or they can deal with it." Enforced in n8n's
-#: deterministic layer as one calendar month; recorded here for traceability.
 SUBMISSION_WINDOW_DAYS = 30
 
 
 def limit_for(category: str | None) -> Limit | None:
-    """The handbook limit for an audit-engine category, or None if uncapped."""
     if not category:
         return None
     return CATEGORY_LIMITS.get(str(category).strip().upper())
 
 
 def normalise_category(category: str | None) -> str:
-    """Coerce an arbitrary category string onto the audit engine's enum.
-
-    n8n's LLM node is schema-constrained so it always returns one of the enum
-    values, but the sheet can be hand-edited and older rows use lowercase, so
-    this stays forgiving rather than assuming clean input.
-    """
     if not category:
         return "OTHER"
     key = str(category).strip().upper().replace(" ", "_").replace("-", "_")

@@ -109,7 +109,7 @@ def test_malformed_ids_already_in_the_sheet_do_not_break_the_next_one(client, sh
     is fixed upstream, a new insert has to step over it rather than crash."""
     sheet_tabs["Receipts"].append_row(
         ["=ROW()-1", "2026-08-01", "Pret", "[]", "9.20", "0", "subsistence",
-         "GBP", "U04SAM", "ref", "pending", "", "", "", "", ""])
+         "GBP", "U04SAM", "", "ref", "pending", "", "", "", "", ""])
     assert client.post(
         "/api/audit", json=NESTED_PAYLOAD).get_json()["receipt_id"] == 1
 
@@ -193,13 +193,13 @@ def test_auditing_does_not_write_to_the_cpi_sheet(client, sheet_tabs):
 def populated(sheet_tabs):
     rows = [
         [1, "2026-08-01", "Pret", "[]", 9.20, 0, "subsistence", "GBP", "U04SAM",
-         "a.jpg", "approved", "low_risk", "", "", "", ""],
+         "", "a.jpg", "approved", "low_risk", "", "", "", ""],
         [2, "2026-08-15", "The Ivy", "[]", 264.00, 24, "client_entertainment",
-         "GBP", "U04ALEX", "b.jpg", "approved", "low_risk", "", "", "", ""],
+         "GBP", "U04ALEX", "", "b.jpg", "approved", "low_risk", "", "", "", ""],
         [3, "2026-09-01", "Trainline", "[]", 88.40, 0, "travel", "GBP", "U04SAM",
-         "c.jpg", "pending_review", "high_risk", "", "", "", ""],
+         "", "c.jpg", "pending_review", "high_risk", "", "", "", ""],
         [4, "2026-07-02", "Figma", "[]", 45.00, 0, "software_technology", "GBP",
-         "U04ALEX", "d.jpg", "rejected", "high_risk", "", "", "",
+         "U04ALEX", "", "d.jpg", "rejected", "high_risk", "", "", "",
          "2026-07-05T09:00:00+00:00"],
     ]
     for row in rows:
@@ -252,6 +252,19 @@ def test_expenses_dates_come_back_as_iso_strings(client, populated):
     results = client.get("/api/expenses").get_json()["results"]
     assert sorted(r["receipt_date"]
                   for r in results) == ["2026-08-01", "2026-08-15"]
+
+
+def test_expenses_reads_dd_mm_yyyy_receipt_dates(client, sheet_tabs):
+    """The Receipts tab is standardised on DD/MM/YYYY: `03/09/2026` must
+    filter as 3 September, not March."""
+    sheet_tabs["Receipts"].append_row(
+        [1, "03/09/2026", "Delta Airlines", "[]", 450.0, 0, "travel", "USD",
+         "j.chen", "", "a.jpg", "approved", "low_risk", "", "", "", ""])
+
+    assert client.get(
+        "/api/expenses?start_date=2026-09-01").get_json()["total"] == 1
+    assert client.get(
+        "/api/expenses?end_date=2026-03-31").get_json()["total"] == 0
 
 
 def test_expenses_on_an_empty_sheet_is_an_empty_page_not_an_error(client):

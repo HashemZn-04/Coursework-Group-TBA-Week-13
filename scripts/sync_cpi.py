@@ -1,23 +1,7 @@
 #!/usr/bin/env python3
-"""Refresh the CPI reference sheet that n8n's agent tool sub-workflow reads.
-
+"""
     python scripts/sync_cpi.py            # pull the World Bank series, write it
     python scripts/sync_cpi.py --dry-run  # show what would be written
-
-Pulls the World Bank's global consumer-price inflation series and writes one row
-per year to the **CPI** tab, with both the published annual rate and a chained
-price index. n8n reads that tab rather than calling the World Bank itself, so the
-workflow has no external dependency at audit time and every run of the agent sees
-the same numbers this repo's tests do.
-
-The series gains one value a year, so this only needs re-running when the World
-Bank publishes — or on demand before a demo. C2 (AA's scheduled pull) is the
-n8n-native version of exactly this; until it exists, run this by hand.
-
-Setup, once: open the CPI spreadsheet (its id lives in `CPI_SPREADSHEET_ID` in
-`api/sheets.py`) -> Share -> add the service account's `client_email` from
-`service_account.json` as an **Editor**. Without that the write fails with a 403,
-even if the sheet is otherwise link-shareable.
 """
 
 import argparse

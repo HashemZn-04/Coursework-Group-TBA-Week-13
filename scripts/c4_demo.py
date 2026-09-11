@@ -1,19 +1,7 @@
 #!/usr/bin/env python3
-"""C4 (MCP-27) acceptance evidence — the constructed example, run live.
-
-    python scripts/c4_demo.py                       # in-process, live World Bank call
+"""
+    python scripts/c4_demo.py
     python scripts/c4_demo.py --api http://localhost:5000
-                                                    # through the running API,
-                                                    # printing request/response
-
-The acceptance criterion asks for "a receipt priced above a static old limit but
-within current inflation-adjusted benchmark [...] correctly classified as
-acceptable (and vice versa) — demonstrated with at least one constructed
-example". This runs five, prints which inflation figures were used and where
-they came from, and exits non-zero if any of them classifies wrongly — so it is
-evidence when it passes and a failing check when it does not.
-
-Paste the output into the C4 Jira ticket. It is the artifact.
 """
 
 import argparse

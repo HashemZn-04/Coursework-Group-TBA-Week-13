@@ -1,22 +1,4 @@
-"""
-The audit engine's HTTP surface — C3 persistence, C4 validation, C5 summary
-generation, and C6's query API.
-
-Run it with `python api/app.py` (or `flask --app api.app run`), both of which the
-import shim below supports.
-
-A note on where this sits in the live system, because it is easy to
-misread: `dashboard/data.py` reads the Google Sheet directly, so the Streamlit
-dashboard does not depend on this process being up, and n8n writes to the sheet
-through its own native Google Sheets node rather than calling here (a localhost
-Flask app is not reachable from n8n Cloud, and this project has no hosting
-target for one). What this module *is*: the executable, tested specification of
-what the pipeline must produce — the exact verdict logic, the exact inflation
-maths, the exact summary wording, and the exact row shape the sheet expects.
-Point n8n's audit branch at `/api/audit` behind a tunnel and the whole pipeline
-runs through it unchanged; leave it off and the numbers here are still the
-reference QA (C7) checks n8n's own nodes against.
-"""
+import re
 
 import pandas as pd
 from flask import Flask, request
@@ -34,47 +16,30 @@ except ImportError:  # pragma: no cover - exercised only by `python api/app.py`
 
 app = Flask(__name__)
 
+# ISO dates must not be parsed with dayfirst=True — see parse_receipt_dates.
+_ISO_LIKE = re.compile(r"^\d{4}-\d{2}-\d{2}")
+
+
+def parse_receipt_dates(values: pd.Series) -> pd.Series:
+    values = pd.Series(values)
+    is_iso = values.astype("string").str.match(_ISO_LIKE).fillna(False)
+    parsed = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+    if is_iso.any():
+        parsed.loc[is_iso] = pd.to_datetime(
+            values[is_iso], format="mixed", errors="coerce")
+    if (~is_iso).any():
+        parsed.loc[~is_iso] = pd.to_datetime(
+            values[~is_iso], format="mixed", dayfirst=True, errors="coerce")
+    return parsed
+
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
-# --------------------------------------------------------------------------- #
-# C3 / C4 / C5 — audit one receipt and persist the verdict
-# --------------------------------------------------------------------------- #
-
 @app.post("/api/audit")
 def audit_receipt():
-    """Audit and persist one receipt.
-
-    Accepts what n8n's audit branch already holds, in either of two shapes:
-
-    * the flat shape (`merchant`, `total`, `risk_level`, `summary`, ...), which
-      is what a "Persist to Audit API" HTTP node placed after "Final Risk
-      Assessment" sends; or
-    * the nested shape (`audit_engine_input` / `contextual_audit` /
-      `final_audit_result`), which is the workflow's own internal payload.
-
-    If the caller supplies a `risk_level`, it is trusted — n8n has already run
-    the governance prompt and computed it. If not, `final_verdict()` recomputes
-    it here from the deterministic checks and the contextual audit, so a caller
-    that only has the raw LLM output still gets a verdict.
-
-    Either way C4 runs on the receipt (inflation-adjusted limit comparison) and
-    C5 builds the summary, and both are folded into the single `verdict_reason`
-    string stored on the receipt row — verdicts are `low_risk` or `high_risk`,
-    and "good deal" or "policy violation" is reasoning, not a third verdict
-    value.
-
-    A `low_risk` verdict is approved on the spot: the receipt is written with
-    `status = approved` and no `decided_at` (nobody decided it, the engine
-    cleared it), so it goes straight into the approved-expense reporting and
-    never reaches the review queue. A `high_risk` verdict is written
-    `pending_review` and waits for Amara, who stamps `decided_at` when she acts.
-    Nothing else auto-approves anywhere, so this endpoint is the single place
-    that decision is made.
-    """
     payload = request.get_json(silent=True) or {}
     engine_input = payload.get("audit_engine_input") or {}
     contextual = payload.get("contextual_audit") or {}
@@ -83,8 +48,6 @@ def audit_receipt():
                      or payload.get("policy_checks") or {})
 
     receipt = dict(engine_input.get("receipt") or {})
-    # Flat-shape fallbacks: read each receipt field from the top level when the
-    # nested object did not carry it.
     for field, source in (("merchant", "merchant"),
                           ("transaction_date", "transaction_date"),
                           ("total", "total"), ("tax", "tax"),
@@ -158,12 +121,6 @@ def audit_receipt():
 
 @app.post("/api/validate")
 def validate_only():
-    """C4 on its own, with nothing persisted.
-
-    This is the endpoint the constructed example in the C4 acceptance criterion
-    is demonstrated against (see `scripts/c4_demo.py`), and the one QA can poke
-    at while spot-checking verdicts without writing rows into the shared sheet.
-    """
     payload = request.get_json(silent=True) or {}
     return contextual_validation(
         payload.get("total"), payload.get("category"),
@@ -171,18 +128,8 @@ def validate_only():
         currency=payload.get("currency"))
 
 
-# --------------------------------------------------------------------------- #
-# C6 — query API for the dashboard
-# --------------------------------------------------------------------------- #
-
 @app.get("/api/expenses")
 def approved_expenses():
-    """Filterable, paginated expense query.
-
-    Defaults to approved expenses, which is the brief's "all approved expenses
-    queryable"; pass `status=` to widen it (`status=all` for everything), which
-    is what QA needs when sampling verdicts across the queue.
-    """
     page = max(int(request.args.get("page", 1)), 1)
     page_size = min(max(int(request.args.get("page_size", 25)), 1), 100)
 
@@ -194,14 +141,19 @@ def approved_expenses():
     if status != "all":
         df = df[df["status"] == status]
     df["total_amount"] = pd.to_numeric(df["total_amount"], errors="coerce")
-    df["receipt_date"] = pd.to_datetime(df["receipt_date"], errors="coerce")
+    df["receipt_date"] = parse_receipt_dates(df["receipt_date"])
 
     if request.args.get("start_date"):
         df = df[df["receipt_date"] >= pd.Timestamp(request.args["start_date"])]
     if request.args.get("end_date"):
         df = df[df["receipt_date"] <= pd.Timestamp(request.args["end_date"])]
     if request.args.get("category"):
-        df = df[df["category"] == request.args["category"]]
+        # Normalised on both sides — the sheet holds `Travel` from n8n and
+        # `travel` from this engine, and an exact match on the raw column
+        # would silently miss half of one category depending on the query's
+        # own casing.
+        df = df[df["category"].map(normalise_category)
+               == normalise_category(request.args["category"])]
     if request.args.get("submitter"):
         df = df[df["submitter"] == request.args["submitter"]]
     if request.args.get("min_amount"):
@@ -221,8 +173,6 @@ def approved_expenses():
 
 @app.get("/api/receipts/<int:receipt_id>")
 def receipt_audit_trail(receipt_id: int):
-    """Full record for one receipt — submission, verdict and decision, all on
-    one row now that there is a single Receipts tab."""
     trail = audit_trail(receipt_id)
     if trail is None:
         return {"error": f"no receipt with id {receipt_id}"}, 404

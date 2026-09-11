@@ -1,21 +1,6 @@
 #!/usr/bin/env python3
-"""I1 acceptance evidence — syndicated-spending detection, run against data.
-
+"""
     python scripts/i1_demo.py
-
-The acceptance criterion asks the model to produce "at least one identifiable
-cluster with a documented similarity basis (e.g. same vendor + similar amount +
-overlapping timeframe across multiple employees)". The first scenario below is
-**the live sheet's own rows** — seven near-identical WAL*MART claims dated the
-same day across two Slack submitters, spelled three different ways — so the
-headline case is real data rather than something constructed to succeed.
-
-The rest are QA's I3 ticket run in advance: "legitimate shared spend patterns"
-that must *not* be raised. A detector that cannot be shown to stay quiet is not
-evidence of anything.
-
-Exits non-zero if any scenario behaves differently from what is stated here.
-Paste the output into I1.
 """
 
 import argparse
@@ -29,17 +14,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from api.clusters import (AMOUNT_TOLERANCE_ABS, AMOUNT_TOLERANCE_PCT,  # noqa: E402
                           DATE_WINDOW_DAYS, IMMATERIAL, REVIEW, find_patterns)
 from api.summary import format_money  # noqa: E402
-from dashboard.data import _parse_dates, _parse_timestamps  # noqa: E402
+from dashboard.data import parse_dates, parse_timestamps  # noqa: E402
 
 
 def receipts(rows):
-    """A frame shaped like `dashboard.data.load_expenses()` returns one."""
     df = pd.DataFrame(rows, columns=[
         "receipt_id", "receipt_date", "merchant", "total_amount", "category",
         "currency", "submitter"])
-    df["date"] = _parse_dates(df["receipt_date"])
+    df["date"] = parse_dates(df["receipt_date"])
     df["created_at"] = "2026-09-09T12:00:00Z"
-    df["submitted_at"] = _parse_timestamps(df["created_at"])
+    df["submitted_at"] = parse_timestamps(df["created_at"])
     df["total"] = pd.to_numeric(df["total_amount"], errors="coerce")
     df["receipt_id"] = df["receipt_id"].astype("Int64")
     df["line_items"] = [[] for _ in range(len(df))]

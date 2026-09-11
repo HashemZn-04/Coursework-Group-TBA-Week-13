@@ -9,9 +9,9 @@ USD receipt and a GBP one produce a number in no unit at all).
 import pandas as pd
 
 from dashboard import data
-from dashboard.spend import (MAX_CHART_BARS, choose_freq,
-                             prevented_running_total, spend_over_time,
-                             spend_summary)
+from dashboard.spend import (MAX_CHART_BARS, UNKNOWN_CURRENCY, choose_freq,
+                             default_currency, prevented_running_total,
+                             spend_over_time, spend_summary)
 from tests.conftest import expenses
 
 
@@ -138,6 +138,20 @@ def test_currencies_are_ordered_by_receipt_count_not_by_amount():
     assert spend_summary(df).currencies == ["GBP", "USD"]
 
 
+def test_default_currency_prefers_gbp_when_present():
+    assert default_currency(["USD", "GBP"]) == "GBP"
+
+
+def test_default_currency_falls_back_to_the_commonest_currency():
+    """No GBP among the options, so the dropdown opens on whichever currency
+    `SpendSummary.currencies` already ranked first (by receipt count)."""
+    assert default_currency(["USD", "EUR"]) == "USD"
+
+
+def test_default_currency_of_no_currencies_is_the_unknown_bucket():
+    assert default_currency([]) == UNKNOWN_CURRENCY
+
+
 # --------------------------------------------------------------------------- #
 # Velocity
 # --------------------------------------------------------------------------- #
@@ -242,7 +256,7 @@ def test_rejecting_a_claim_moves_money_from_at_risk_to_prevented(sheet_tabs):
     and `update_decision`'s cache invalidation, not only the arithmetic."""
     sheet_tabs["Receipts"].append_row(
         [1, "2026-08-14", "The Ivy", "[]", 264.0, 24.0, "client_entertainment",
-         "GBP", "U04ALEX", "b.jpg", "pending_review", "high_risk",
+         "GBP", "U04ALEX", "", "b.jpg", "pending_review", "high_risk",
          "Over the guideline", "2026-08-14T09:00:00+00:00", "", ""])
 
     before = spend_summary(data.load_expenses())

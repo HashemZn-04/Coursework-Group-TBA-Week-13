@@ -1,65 +1,3 @@
-"""
-C4 — Contextual Validation, inflation-aware (MCP-27), plus the verdict mapping
-C3/C5 share.
-
-Where this sits in the pipeline. Every receipt runs the same three stages, in
-this order, and comes out one of exactly two ways:
-
-    1. Deterministic policy checks   hard limits, approval thresholds, the
-                                     one-month cutoff (n8n's "Deterministic
-                                     Policy Checks" node)
-    2. Contextual validation (C4)    the receipt against its category limit,
-                                     re-priced to today's CPI — this module
-    3. Final risk assessment         combine both with the governance prompt's
-                                     contextual read, and split:
-
-           low_risk   -> approved automatically, nobody looks at it
-           high_risk  -> the CFO's review queue
-
-There is no third outcome and no "assessed but parked" state. A receipt holding
-neither verdict has not been through the pipeline at all — that is a failure to
-process it, not a classification, and the dashboard reports it as one.
-
-The problem this solves is the brief's "Policy Decay": Amara's handbook was
-written in 2019 and its numbers have not moved since, so a receipt can be over
-the written limit while being an entirely normal 2026 price. Comparing against
-the static figure alone produces false flags; comparing against nothing produces
-no control at all. So every limit in `api.policy` carries the period it was set
-in, and this module re-prices it to today's CPI before comparing:
-
-    adjusted_limit = static_limit * (CPI_now / CPI_at_the_time_the_limit_was_set)
-
-and then classifies the receipt into one of:
-
-    WITHIN_LIMIT      total is inside the original figure — no argument either way
-    GOOD_DEAL         over the stale figure, inside the re-priced one — this is
-                      the case the brief cares about, and it is *not* a flag
-    OVER_GUIDELINE    over the re-priced figure, but the handbook calls that
-                      figure a guideline (5.2) rather than a ceiling
-    POLICY_VIOLATION  over the re-priced figure on a hard limit
-    NO_LIMIT          the handbook sets no numeric ceiling for this category
-
-The LLM half of the audit (contextual reasonableness) runs in n8n's "AI
-Contextual Audit" node against `api.governance_prompt.SYSTEM_PROMPT`, using the
-team's existing OpenAI credential there. This module deliberately holds no LLM
-call: it is the deterministic, testable, reproducible half, and it produces the
-same answer for the same receipt every time — which is what makes it auditable.
-
-Inflation comes from one global series — the World Bank's world aggregate for
-annual consumer-price inflation — rather than a per-country index. Meridian's
-limits are a single firm-wide set of figures, so re-pricing them needs exactly
-one inflation number; and a receipt from Berlin, Boston or Bristol is measured
-against the same firm limit either way. One source, no per-country routing, and
-no API key.
-
-The honest cost of that choice: the global series is **annual and published in
-arrears** (latest is 2025, where a national index like the UK's runs monthly to
-2026-07). So the adjustment is a year-granular figure that lags the present by
-roughly a year, and it always under-states rather than over-states the
-re-pricing. Every result carries the years it actually used, so this is visible
-rather than assumed.
-"""
-
 import os
 from functools import lru_cache
 
@@ -78,41 +16,27 @@ except ImportError:  # pragma: no cover - exercised only by `python api/app.py`
 
 load_dotenv()
 
-#: n8n still computes three risk levels, because it uses them to pick between
-#: three different Slack replies. We store two verdicts. MEDIUM — the workflow's
-#: "needs an explanation from the employee" tier — maps to `high_risk`: it is by
-#: definition not something the engine is confident enough to auto-approve.
+# n8n computes three risk levels to pick between three Slack replies; we store
+# two verdicts. MEDIUM ("needs an explanation") maps to high_risk.
 RISK_TO_VERDICT = {"HIGH": VERDICT_HIGH, "MEDIUM": VERDICT_HIGH,
                    "LOW": VERDICT_LOW}
 
 
 def map_verdict(risk_level: str) -> str:
-    """n8n's risk level -> the verdict vocabulary stored on the Receipts row.
-
-    An unrecognised risk level resolves to `high_risk`, not `low_risk`. `low_risk`
-    now carries an automatic approval, so the safe direction for an unknown
-    value is towards a human, not past one.
-    """
     return RISK_TO_VERDICT.get(str(risk_level).strip().upper(), VERDICT_HIGH)
 
 
 # --------------------------------------------------------------------------- #
-# Global inflation (stands in for C2's scheduled pull until AA builds it)
+# Global inflation
 # --------------------------------------------------------------------------- #
 
-#: World Bank: world aggregate, "Inflation, consumer prices (annual %)".
-#: Free, no key, no signup.
 WORLD_BANK_URL = ("https://api.worldbank.org/v2/country/WLD/"
                   "indicator/FP.CPI.TOTL.ZG")
 WORLD_BANK_TIMEOUT = 15
 CPI_SERIES_ID = "WLD.FP.CPI.TOTL.ZG"
 
-#: Published global annual inflation, %, captured from the World Bank
-#: 2026-09-09. Used when the API cannot be reached so a demo still produces a
-#: defensible number; every result says which source it came from.
-#: Full published precision, not rounded — a 2dp copy drifts about a penny per
-#: £100 of limit against the live figures, which would make the offline demo and
-#: the live one disagree for no reason anyone could explain.
+# Fallback used when the World Bank API is unreachable, captured 2026-09-09.
+# Full published precision, not rounded, so the offline demo matches the live one.
 GLOBAL_INFLATION_FALLBACK: dict[int, float] = {
     2015: 1.43702380935655, 2016: 1.59691227583204, 2017: 2.22314331448899,
     2018: 2.44258329692817, 2019: 2.20607305781525, 2020: 1.90509722047501,
@@ -123,11 +47,6 @@ GLOBAL_INFLATION_FALLBACK: dict[int, float] = {
 
 @lru_cache(maxsize=1)
 def global_inflation_rates() -> tuple[dict[int, float], str]:
-    """``({year: annual inflation %}, source)`` for the world aggregate.
-
-    Cached for the life of the process — the series only gains a value once a
-    year, and C2's scheduled pull will eventually front this.
-    """
     try:
         response = requests.get(
             WORLD_BANK_URL, params={"format": "json", "per_page": 200},
@@ -143,18 +62,10 @@ def global_inflation_rates() -> tuple[dict[int, float], str]:
         return dict(GLOBAL_INFLATION_FALLBACK), "fallback"
 
 
-def _price_index(rates: dict[int, float]) -> tuple[dict[int, float], float]:
-    """Chain annual rates into price levels, anchored at 100.
-
-    The World Bank publishes a rate per year for the world aggregate, not an
-    index, so the levels we compare are compounded from those rates. Returns the
-    level at the *start* of each year, plus the level reached at the *end* of the
-    last published year.
-
-    Start-of-year for the base is the deliberate choice: the handbook was issued
-    in March 2019, so nearly all of 2019's own inflation applies to it. Measuring
-    from the end of 2019 would silently drop a year of it.
-    """
+def price_index(rates: dict[int, float]) -> tuple[dict[int, float], float]:
+    # Level at the start of each year, anchored at 100. Start-of-year for the
+    # base matters: the handbook was issued March 2019, so nearly all of that
+    # year's inflation applies to it.
     index, level = {}, 100.0
     for year in sorted(rates):
         index[year] = level
@@ -162,39 +73,26 @@ def _price_index(rates: dict[int, float]) -> tuple[dict[int, float], float]:
     return index, level
 
 
-def _year_of(period: str | int) -> int:
+def year_of(period: str | int) -> int:
     return int(str(period)[:4])
 
 
 @lru_cache(maxsize=32)
 def cpi_for(period: str | int | None = None) -> tuple[str, float, str]:
-    """Price level for a year, as ``(year, index_level, source)``.
-
-    `period` is anything starting with a year (``"2019-03-01"`` or ``2019``),
-    giving the level at the start of that year. None gives the level at the end
-    of the latest published year — labelled with that year, so the reported
-    vintage is the last year we actually have data for and never a year we do
-    not.
-
-    Because the global series is annual, the month in a base period is ignored:
-    a limit set in March 2019 and one set in November 2019 re-price identically.
-    """
     rates, source = global_inflation_rates()
-    index, end_level = _price_index(rates)
+    index, end_level = price_index(rates)
     last_year = max(rates)
     if period is None:
         return str(last_year), round(end_level, 4), source
-    year = min(max(_year_of(period), min(index)), last_year)  # clamp to series
+    year = min(max(year_of(period), min(index)), last_year)  # clamp to series
     return str(year), round(index[year], 4), source
 
 
 def latest_cpi() -> float:
-    """Most recent global price level on the chained index."""
     return cpi_for(None)[1]
 
 
 def inflation_factor(base_period: str) -> tuple[float, dict]:
-    """How much global prices have moved since `base_period`, plus provenance."""
     base_year, base_value, base_source = cpi_for(base_period)
     latest_year, latest_value, latest_source = cpi_for(None)
     provenance = {
@@ -210,37 +108,18 @@ def inflation_factor(base_period: str) -> tuple[float, dict]:
 
 
 def inflation_adjusted_limit(static_limit: float, base_period: str) -> float:
-    """A limit set in `base_period`, restated in today's money."""
     factor, _ = inflation_factor(base_period)
     return round(static_limit * factor, 2)
 
 
 # --------------------------------------------------------------------------- #
-# C4 proper
+# C4 — contextual validation
 # --------------------------------------------------------------------------- #
 
 def contextual_validation(total: float, category: str, units: int = 1,
                           currency: str | None = None) -> dict:
-    """Classify a receipt against its inflation-adjusted handbook limit.
-
-    `units` is the divisor the limit's basis calls for — attendee count for a
-    per-head limit, days claimed for a per-day one. It defaults to 1, which is
-    the right answer for a single claim and a safe (strictest) reading when the
-    receipt does not tell us the headcount. Attendee count is one of the fields
-    QA flagged as missing from the schema; until it is captured, a two-person
-    client dinner is measured against the one-person limit, so a per-head
-    overage here means "ask", not "reject".
-
-    `currency` does not convert anything — no FX source is wired in. The
-    handbook's limits are GBP and Section 12.2 wants conversion at the rate on
-    the transaction date, which nothing in this pipeline does yet. Rather than
-    pretend, a non-GBP receipt is still compared against the limit and the
-    result says out loud that the comparison is unconverted, so a reviewer reads
-    it knowing that. Amara was explicit that exchange rate and local purchasing
-    power both matter here, so this is a gap to close, not a detail.
-    """
     category = normalise_category(category)
-    amount = _to_float(total)
+    amount = to_float(total)
     limit = limit_for(category)
 
     if limit is None:
@@ -250,7 +129,7 @@ def contextual_validation(total: float, category: str, units: int = 1,
             "static_limit": None,
             "adjusted_limit": None,
             "detail": (
-                f"The handbook sets no numeric limit for {_label(category)}; "
+                f"The handbook sets no numeric limit for {category_label(category)}; "
                 f"this claim is governed by the general approval thresholds "
                 f"(line manager over "
                 f"{APPROVAL_THRESHOLDS['line_manager']:,.0f}, CFO over "
@@ -262,8 +141,7 @@ def contextual_validation(total: float, category: str, units: int = 1,
     unit_amount = round(amount / units, 2)
     factor, cpi = inflation_factor(limit.base_period)
     adjusted = round(limit.amount * factor, 2)
-    # Guard the pathological case of a deflating index, where the re-priced
-    # figure would otherwise be *stricter* than the written one.
+    # Guard the pathological case of a deflating index re-pricing stricter.
     ceiling = max(adjusted, limit.amount)
 
     if unit_amount <= limit.amount:
@@ -289,12 +167,12 @@ def contextual_validation(total: float, category: str, units: int = 1,
         "currency": (currency or REPORTING_CURRENCY).upper(),
         "unconverted_currency": unconverted,
         "cpi": cpi,
-        "detail": _validation_detail(assessment, limit, unit_amount, adjusted,
+        "detail": validation_detail(assessment, limit, unit_amount, adjusted,
                                      factor, currency, unconverted),
     }
 
 
-def _validation_detail(assessment: str, limit: Limit, unit_amount: float,
+def validation_detail(assessment: str, limit: Limit, unit_amount: float,
                        adjusted: float, factor: float,
                        currency: str | None = None,
                        unconverted: bool = False) -> str:
@@ -331,11 +209,11 @@ def _validation_detail(assessment: str, limit: Limit, unit_amount: float,
     return detail
 
 
-def _label(category: str) -> str:
+def category_label(category: str) -> str:
     return category.replace("_", " ").lower()
 
 
-def _to_float(value) -> float:
+def to_float(value) -> float:
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -348,20 +226,6 @@ def _to_float(value) -> float:
 
 def final_verdict(policy_checks: dict, contextual_audit: dict,
                   validation: dict | None = None) -> tuple[str, str, list[str]]:
-    """Combine the deterministic, LLM and inflation layers into one verdict.
-
-    Returns ``(verdict, risk_level, flags)``, where verdict is `low_risk` or
-    `high_risk` and risk_level keeps n8n's three-value vocabulary so its Slack
-    routing still has the distinction it needs. This deliberately reproduces the
-    logic in n8n's "Final Risk Assessment" node rather than replacing it: n8n
-    normally sends its own `risk_level` and `/api/audit` trusts it, so this is
-    the path taken when a caller posts a raw contextual audit with no risk level
-    — and it is the executable spec QA (C7) can check the n8n node against.
-
-    C4's outcome is folded in here rather than becoming a fourth verdict value:
-    the Receipts row only ever holds `low_risk` or `high_risk`, and "good deal"
-    or "policy violation" is reasoning that belongs in `verdict_reason`.
-    """
     policy_checks = policy_checks or {}
     contextual_audit = contextual_audit or {}
     approval = policy_checks.get("approval") or {}
@@ -393,7 +257,7 @@ def final_verdict(policy_checks: dict, contextual_audit: dict,
         or contextual_audit.get("business_relevance") == "UNCLEAR"
         or contextual_audit.get("reasonableness") in ("QUESTIONABLE",
                                                       "INSUFFICIENT_INFORMATION")
-        or _to_float(contextual_audit.get("confidence")) < 0.75
+        or to_float(contextual_audit.get("confidence")) < 0.75
         or assessment == "OVER_GUIDELINE"
     )
     if medium_risk:

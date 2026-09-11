@@ -1,16 +1,3 @@
-"""
-v1 Governance Prompt (A3) for the contextual-audit layer.
-
-Base text is AA's existing "AI Contextual Audit" n8n node prompt, kept verbatim
-(paragraphs 1-5 below) — this is a drop-in replacement for that node's system
-prompt, not a rewrite. Extended with the concrete rules Amara confirmed in the
-stakeholder interview (transcript.md) that AA's version doesn't cover yet.
-
-Status: interim v1, not yet signed off by PM. Sync before treating as final —
-this content is technically ticket A3, being unblocked here so C3 isn't stalled
-waiting on it.
-"""
-
 SYSTEM_PROMPT = """You are the contextual reasoning component of an employee expense auditing system.
 
 The deterministic policy layer has already checked objective rules. Do not override deterministic results.

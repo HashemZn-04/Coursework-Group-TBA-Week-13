@@ -35,7 +35,7 @@ def expenses(*rows) -> pd.DataFrame:
 
     Each row is a dict; anything omitted takes the default below.
     """
-    from dashboard.data import _parse_dates, _parse_timestamps
+    from dashboard.data import parse_dates, parse_timestamps
 
     defaults = {"receipt_id": None, "receipt_date": "2026-08-01",
                 "merchant": "Merchant", "line_items": [], "total_amount": 10.0,
@@ -53,9 +53,9 @@ def expenses(*rows) -> pd.DataFrame:
         built.append(merged)
 
     df = pd.DataFrame(built)
-    df["date"] = _parse_dates(df["receipt_date"])
-    df["submitted_at"] = _parse_timestamps(df["created_at"])
-    df["decided_at"] = _parse_timestamps(df["decided_at"])
+    df["date"] = parse_dates(df["receipt_date"])
+    df["submitted_at"] = parse_timestamps(df["created_at"])
+    df["decided_at"] = parse_timestamps(df["decided_at"])
     df["total"] = pd.to_numeric(df["total_amount"], errors="coerce")
     df["receipt_id"] = pd.to_numeric(df["receipt_id"],
                                      errors="coerce").astype("Int64")
@@ -102,7 +102,7 @@ class FakeWorksheet:
     """Enough of gspread's Worksheet for the code under test.
 
     Values are stored as strings because that is what Sheets hands back, which
-    is exactly the property `_next_id` and the dashboard's numeric coercion have
+    is exactly the property `next_id` and the dashboard's numeric coercion have
     to survive.
     """
 
@@ -164,7 +164,7 @@ def no_live_sheets(monkeypatch):
             "accessor on every module that imported it, api.app included")
 
     monkeypatch.setattr(api_sheets, "client", refuse)
-    monkeypatch.setattr(dashboard_data, "_client", refuse)
+    monkeypatch.setattr(dashboard_data, "client", refuse)
 
     # The dashboard's loaders are st.cache_data-wrapped to stay inside the
     # Sheets read quota, which would otherwise leak one test's rows into the

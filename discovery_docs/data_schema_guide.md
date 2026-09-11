@@ -35,3 +35,9 @@ Your step-by-step for defining the shared receipt schema today.
 Note: the live Google Sheet is now a single Receipts table — there is no
 separate Verdicts/Decisions tab. `verdict`, `verdict_reason` and `decided_at`
 are columns on the same row as everything else above.
+
+Note: the live sheet's `receipt_date` column (this table's `date`) is not
+ISO 8601 as originally specified — it is standardised on `DD/MM/YYYY` (e.g.
+`20/08/2026`). `submitted_at`/`created_at`, `updated_at` and `decided_at`
+remain ISO 8601 datetimes; only the receipt's own date changed format.
+

@@ -16,17 +16,12 @@ st.caption(
 
 df = load_expenses()
 
-# A receipt leaves the queue the moment its status stops being pending_review,
-# so filtering on verdict plus status is enough — no separate decision history
-# to reconcile against.
 queue = df[(df["verdict"] == VERDICT_HIGH)
            & (df["status"].astype("string").str.strip().str.lower()
               == "pending_review")] if not df.empty else df
 
-# A receipt with no verdict is not a quieter kind of queue item — it never went
-# through the pipeline at all. It does not belong in the list below (nothing
-# assessed it as high risk), but it must not be invisible either: it is an
-# expense sitting in the system that nobody and nothing has acted on.
+# A receipt with no verdict never went through the pipeline — it doesn't
+# belong in the list below, but it needs surfacing so it isn't invisible.
 unprocessed = df[df["verdict"].isna()] if not df.empty else df
 if not unprocessed.empty:
     st.error(
@@ -47,9 +42,6 @@ if queue.empty:
     st.info("No receipts pending review.")
     st.stop()
 
-# Newest first. Everything here is the same tier now, so date is the only
-# ordering that means anything — and Amara is the sole approver, so this queue
-# is the bottleneck the whole workflow exists to shorten.
 queue = queue.sort_values("date", ascending=False)
 
 st.write(f"**{len(queue)}** awaiting your decision.")

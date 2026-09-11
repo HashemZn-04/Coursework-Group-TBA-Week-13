@@ -6,7 +6,6 @@ pandas
 streamlit
 gspread
 google-auth
-openai
 requests
 scikit-learn
 python-dotenv

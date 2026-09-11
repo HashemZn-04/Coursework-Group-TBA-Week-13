@@ -1,10 +1,13 @@
+import altair as alt
 import streamlit as st
 
+from api.policy import normalise_category
 from api.summary import format_money
 from dashboard.data import load_expenses
 from dashboard.forecast_view import render_forecast
-from dashboard.spend import (UNKNOWN_CURRENCY, prevented_running_total,
-                             spend_over_time, spend_summary)
+from dashboard.spend import (UNKNOWN_CURRENCY, default_currency,
+                             prevented_running_total, spend_over_time,
+                             spend_summary)
 
 st.title("Spend Overview")
 
@@ -19,14 +22,12 @@ summary = spend_summary(df)
 currencies = summary.currencies
 
 
-def _label(code: str) -> str:
+def currency_label(code: str) -> str:
     return "Currency not recorded" if code == UNKNOWN_CURRENCY else code
 
 
-# Totals are shown per currency and never added together. The sheet holds USD
-# sample receipts while every handbook limit is GBP, and nothing in this
-# pipeline converts between them — Handbook 12.2 wants the rate on the date the
-# expense was incurred, and no FX source is wired in.
+# Nothing in this pipeline converts between currencies (Handbook 12.2), so
+# totals are shown per currency and never added together.
 if len(currencies) > 1:
     st.caption(
         "Totals are shown per currency. Nothing here converts between them "
@@ -35,34 +36,34 @@ if len(currencies) > 1:
         "yourself before comparing the rows."
     )
 
-for code in currencies:
-    row = summary.totals.loc[code]
-    if len(currencies) > 1 or code == UNKNOWN_CURRENCY:
-        st.subheader(_label(code))
+summary_code = st.selectbox(
+    "Currency", currencies, format_func=currency_label, key="currency_summary",
+    index=currencies.index(default_currency(currencies)))
+row = summary.totals.loc[summary_code]
 
-    claimed, approved, at_risk, prevented = st.columns(4)
-    claimed.metric("Claimed", format_money(row["claimed"], code),
-                   help="Everything submitted, whatever happened to it next — "
-                        "including claims still awaiting a decision and claims "
-                        "the pipeline never processed.")
-    claimed.caption(f"{int(row['claimed_count'])} claims")
+claimed, approved, at_risk, prevented = st.columns(4)
+claimed.metric("Claimed", format_money(row["claimed"], summary_code),
+               help="Everything submitted, whatever happened to it next — "
+                    "including claims still awaiting a decision and claims "
+                    "the pipeline never processed.")
+claimed.caption(f"{int(row['claimed_count'])} claims")
 
-    approved.metric("Approved", format_money(row["approved"], code),
-                    help="Claims with a standing approval — yours, or the "
-                         "engine's automatic approval of a low-risk claim. "
-                         "This money is payable.")
-    approved.caption(f"{int(row['approved_count'])} claims")
+approved.metric("Approved", format_money(row["approved"], summary_code),
+                help="Claims with a standing approval — yours, or the "
+                     "engine's automatic approval of a low-risk claim. "
+                     "This money is payable.")
+approved.caption(f"{int(row['approved_count'])} claims")
 
-    at_risk.metric("At risk · awaiting your decision",
-                   format_money(row["at_risk"], code),
-                   help="High-risk claims with no decision recorded. This is "
-                        "money at risk, not money saved — nothing is prevented "
-                        "until you reject it.")
-    at_risk.caption(f"{int(row['at_risk_count'])} claims")
+at_risk.metric("At risk · awaiting your decision",
+               format_money(row["at_risk"], summary_code),
+               help="High-risk claims with no decision recorded. This is "
+                    "money at risk, not money saved — nothing is prevented "
+                    "until you reject it.")
+at_risk.caption(f"{int(row['at_risk_count'])} claims")
 
-    prevented.metric("Leakage prevented", format_money(row["prevented"], code),
-                     help="Claims you rejected, so the money was not paid out.")
-    prevented.caption(f"{int(row['prevented_count'])} claims")
+prevented.metric("Leakage prevented", format_money(row["prevented"], summary_code),
+                 help="Claims you rejected, so the money was not paid out.")
+prevented.caption(f"{int(row['prevented_count'])} claims")
 
 st.caption(
     "**At risk** is money still on the table — claims flagged and not yet "
@@ -76,11 +77,9 @@ if not summary.totals["prevented_count"].any():
         "This figure moves the first time you reject a claim in the Review Queue."
     )
 
-# Every receipt the pipeline processes ends up either auto-approved or queued.
-# A receipt holding neither verdict did not complete the pipeline, so this is a
-# processing failure, not a third category. It is inside Claimed — somebody did
-# claim that money — and in none of the outcome tiles, because nothing has
-# assessed it.
+# A receipt holding neither verdict never completed the pipeline — a
+# processing failure, not a third category. It's inside Claimed and in none
+# of the outcome tiles.
 unprocessed_count = int(summary.totals["unprocessed_count"].sum())
 if unprocessed_count:
     amounts = "; ".join(
@@ -117,52 +116,103 @@ if integrity:
     st.warning("**Data integrity**\n\n" +
                "\n\n".join(f"- {line}" for line in integrity))
 
-# One currency per chart — an axis cannot carry two units. The busiest currency
-# is the one charted; the tiles above already cover them all.
-chart_currency = currencies[0] if currencies else UNKNOWN_CURRENCY
-
 st.subheader("Spend velocity")
-timeline = spend_over_time(df, chart_currency)
+velocity_code = st.selectbox(
+    "Currency", currencies, format_func=currency_label, key="currency_velocity",
+    index=currencies.index(default_currency(currencies)))
+timeline = spend_over_time(df, velocity_code)
 if timeline.empty:
-    st.info("No receipt in this currency has a readable date, so there is "
-            "nothing to plot over time.")
+    st.info(f"No receipt in {currency_label(velocity_code)} has a readable date, so "
+            f"there is nothing to plot over time.")
 else:
-    st.bar_chart(timeline["spend"])
+    chart_data = timeline.reset_index()
+    st.altair_chart(
+        alt.Chart(chart_data).mark_bar().encode(
+            x=alt.X("date:T", title="Period"),
+            y=alt.Y("spend:Q", title=f"Spend ({currency_label(velocity_code)})"),
+            tooltip=[alt.Tooltip("date:T", title="Period"),
+                     alt.Tooltip("spend:Q", title="Spend", format=",.2f"),
+                     alt.Tooltip("receipts:Q", title="Claims")],
+        ),
+        use_container_width=True,
+    )
     grain = {"D": "day", "W": "week", "MS": "month", "QS": "quarter",
              "YS": "year"}
     freq = timeline.index.freqstr or ""
     st.caption(
         f"Spend per {grain.get(freq.split('-')[0], 'period')}, in "
-        f"{_label(chart_currency)} — {int(timeline['receipts'].sum())} claims "
+        f"{currency_label(velocity_code)} — {int(timeline['receipts'].sum())} claims "
         f"across {len(timeline)} periods. Periods with no claims are drawn as "
         f"zero, because a quiet month is a fact about velocity."
     )
-    undated = int(df["date"].isna().sum())
-    if undated:
-        st.caption(f"{undated} receipt(s) omitted — no readable date.")
+undated = int(df["date"].isna().sum())
+if undated:
+    st.caption(f"{undated} receipt(s) omitted — no readable date.")
 
 st.subheader("Leakage prevented, running total")
-running = prevented_running_total(df, chart_currency)
+running_total_code = st.selectbox(
+    "Currency", currencies, format_func=currency_label, key="currency_running_total",
+    index=currencies.index(default_currency(currencies)))
+running = prevented_running_total(df, running_total_code)
 if running.empty:
-    st.info("Nothing rejected yet in this currency, so there is no running "
-            "total to draw. It starts the first time you reject a claim.")
+    st.info(f"Nothing rejected in {currency_label(running_total_code)} yet, so there "
+            f"is no running total to draw. It starts the first time you "
+            f"reject a claim in the Review Queue.")
 else:
-    st.line_chart(running)
+    chart_data = running.reset_index()
+    chart_data.columns = ["decided_at", "amount"]
+    st.altair_chart(
+        alt.Chart(chart_data).mark_line(point=True).encode(
+            x=alt.X("decided_at:T", title="Decision date"),
+            y=alt.Y("amount:Q",
+                    title=f"Cumulative leakage prevented ({currency_label(running_total_code)})"),
+            tooltip=[alt.Tooltip("decided_at:T", title="Decided on"),
+                     alt.Tooltip("amount:Q", title="Cumulative total",
+                                 format=",.2f")],
+        ),
+        use_container_width=True,
+    )
     st.caption(
-        f"Cumulative value of rejected claims in {_label(chart_currency)}, "
-        f"plotted on the date the claim was rejected."
+        f"Cumulative value of rejected claims in {currency_label(running_total_code)}. "
+        f"Each point is the running total as of the date a claim was "
+        f"rejected — the x-axis is time, the y-axis is money not paid out so "
+        f"far."
     )
 
 st.subheader("Spend by category")
+category_code = st.selectbox(
+    "Currency", currencies, format_func=currency_label, key="currency_category",
+    index=currencies.index(default_currency(currencies)))
 by_currency = df[df["currency"].astype("string").fillna("").str.strip().str.upper()
-                 == chart_currency]
-by_category = by_currency.groupby(
-    "category")["total"].sum().sort_values(ascending=False)
+                 == category_code]
+# Categories are normalised first — the sheet holds both `Travel` from n8n and
+# `travel` from the audit engine, and grouping the raw column would split one
+# category across two bars.
+by_category = (by_currency.assign(category=by_currency["category"].map(normalise_category))
+               .groupby("category")["total"].sum()
+               .sort_values(ascending=False))
 if by_category.empty:
-    st.info("No categorised spend in this currency yet.")
+    st.info(f"No categorised spend yet in {currency_label(category_code)}.")
 else:
-    st.bar_chart(by_category)
+    chart_data = by_category.reset_index()
+    chart_data.columns = ["category", "total"]
+    st.altair_chart(
+        alt.Chart(chart_data).mark_bar().encode(
+            x=alt.X("category:N", title="Category", sort="-y",
+                    axis=alt.Axis(labelAngle=-20)),
+            y=alt.Y("total:Q", title=f"Total spend ({currency_label(category_code)})"),
+            tooltip=[alt.Tooltip("category:N", title="Category"),
+                     alt.Tooltip("total:Q", title="Total spend", format=",.2f")],
+        ),
+        use_container_width=True,
+    )
     st.caption(
-        f"All claims in {_label(chart_currency)}, whatever their outcome.")
+        f"All claims in {currency_label(category_code)}, whatever their outcome.")
 
-render_forecast(df, chart_currency)
+if currencies:
+    forecast_code = st.selectbox(
+        "Currency", currencies, format_func=currency_label, key="currency_forecast",
+        index=currencies.index(default_currency(currencies)))
+    render_forecast(df, forecast_code)
+else:
+    render_forecast(df, UNKNOWN_CURRENCY)
