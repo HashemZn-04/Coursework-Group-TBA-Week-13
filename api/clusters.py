@@ -1,6 +1,7 @@
 import re
 from dataclasses import dataclass
 
+import numpy as np
 import pandas as pd
 from sklearn.cluster import DBSCAN
 
@@ -64,15 +65,6 @@ def merchant_key(name) -> str:
     return "".join(kept or tokens)
 
 
-def distance(a: pd.Series, b: pd.Series) -> float:
-    """Multiples of tolerance apart; 1.0 = exactly at the limit."""
-    tolerance = max(AMOUNT_TOLERANCE_PCT * max(abs(a["total"]), abs(b["total"])),
-                    AMOUNT_TOLERANCE_ABS)
-    amount = abs(a["total"] - b["total"]) / tolerance
-    days = abs((a["date"] - b["date"]).days)
-    return max(amount, days / DATE_WINDOW_DAYS)
-
-
 def classify_severity(total: float, amounts: list, dates: set, repeats: dict) -> tuple:
     reasons = []
     if repeats:
@@ -115,12 +107,27 @@ def find_patterns(expenses: pd.DataFrame) -> list[Pattern]:
         if len(block) < 2:
             continue
         block = block.reset_index(drop=True)
-        size = len(block)
-        matrix = [[0.0] * size for _ in range(size)]
-        for i in range(size):
-            for j in range(i + 1, size):
-                d = distance(block.loc[i], block.loc[j])
-                matrix[i][j] = matrix[j][i] = d
+
+        # Vectorised pairwise distance ("multiples of tolerance apart; 1.0 =
+        # exactly at the limit") rather than a Python-level nested loop over
+        # `.loc[i]`/`.loc[j]` — that loop paid pandas row-access overhead
+        # twice per pair, which was fine at dozens of claims per merchant but
+        # became the page's bottleneck once a common chain (a coffee shop, an
+        # airline) reached a few hundred.
+        totals = block["total"].to_numpy(dtype=float)
+        abs_totals = np.abs(totals)
+        tolerance = np.maximum(
+            AMOUNT_TOLERANCE_PCT * np.maximum.outer(abs_totals, abs_totals),
+            AMOUNT_TOLERANCE_ABS)
+        amount_ratio = np.abs(np.subtract.outer(totals, totals)) / tolerance
+
+        # Whole days apart, matching Timedelta.days (floor division, not
+        # truncation) so this agrees with the row-wise version to the day.
+        date_ns = block["date"].to_numpy("datetime64[ns]").astype("int64")
+        day_diff = np.subtract.outer(date_ns, date_ns) // 86_400_000_000_000
+        day_ratio = np.abs(day_diff) / DATE_WINDOW_DAYS
+
+        matrix = np.maximum(amount_ratio, day_ratio)
 
         labels = DBSCAN(eps=1.0, min_samples=2,
                         metric="precomputed").fit_predict(matrix)

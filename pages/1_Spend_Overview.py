@@ -9,7 +9,9 @@ from dashboard.forecast_view import render_forecast
 from dashboard.spend import (UNKNOWN_CURRENCY, default_currency,
                              prevented_running_total, spend_over_time,
                              spend_summary)
+from dashboard.style import inject_responsive_metric_css
 
+inject_responsive_metric_css()
 st.title("Spend Overview")
 
 df = load_expenses()

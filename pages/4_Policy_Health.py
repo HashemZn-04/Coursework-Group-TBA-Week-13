@@ -10,7 +10,9 @@ from dashboard.policy_health import (CLEARED, MIN_RATE_BASE, NEEDS_REVIEW,
                                      repriced_within_todays_money,
                                      rule_breaches, trend_is_sparse,
                                      verdict_state)
+from dashboard.style import inject_responsive_metric_css
 
+inject_responsive_metric_css()
 st.title("Policy Health")
 st.caption(
     "Two questions, from two sources. **Is the pipeline clearing claims, and is "
