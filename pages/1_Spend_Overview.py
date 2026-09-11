@@ -117,14 +117,28 @@ if integrity:
                "\n\n".join(f"- {line}" for line in integrity))
 
 st.subheader("Spend velocity")
-velocity_code = st.selectbox(
+col1, col2 = st.columns([2, 1])
+velocity_code = col1.selectbox(
     "Currency", currencies, format_func=currency_label, key="currency_velocity",
     index=currencies.index(default_currency(currencies)))
-timeline = spend_over_time(df, velocity_code)
-if timeline.empty:
+
+velocity_data = spend_over_time(df, velocity_code)
+if velocity_data.empty:
     st.info(f"No receipt in {currency_label(velocity_code)} has a readable date, so "
             f"there is nothing to plot over time.")
 else:
+    velocity_dates = velocity_data.index.to_timestamp()
+    date_range = col2.date_input(
+        "Date range",
+        value=(velocity_dates.min(), velocity_dates.max()),
+        key="velocity_date_range"
+    )
+
+    timeline = velocity_data
+    if len(date_range) == 2:
+        timeline = timeline[(timeline.index.to_timestamp() >= pd.Timestamp(date_range[0]))
+                            & (timeline.index.to_timestamp() <= pd.Timestamp(date_range[1]))]
+
     chart_data = timeline.reset_index()
     st.altair_chart(
         alt.Chart(chart_data).mark_bar().encode(

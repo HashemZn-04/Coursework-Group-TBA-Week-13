@@ -64,7 +64,7 @@ misc_tile.metric("Coded Miscellaneous", f"{misc} of {len(df)}",
                       "be this, like, our most common category, and it should "
                       "be our rarest by miles\". Categorisation happens at "
                       "intake, so this needs no verdict.")
-misc_tile.caption(f"{misc / len(df):.0%} of all receipts")
+misc_tile.caption(f"{misc / len(df):.2%} of all receipts")
 
 if counts[NEVER_ASSESSED]:
     st.error(

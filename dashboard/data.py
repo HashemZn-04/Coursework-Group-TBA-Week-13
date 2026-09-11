@@ -118,10 +118,20 @@ def parse_dates(values: pd.Series) -> pd.Series:
 def parse_timestamps(values: pd.Series) -> pd.Series:
     # Normalised to tz-naive UTC: created_at/updated_at/decided_at carry an
     # offset, receipt_date does not, and subtracting tz-aware from tz-naive
-    # raises TypeError.
-    parsed = pd.to_datetime(values, format="mixed", errors="coerce", utc=True)
-    tz = getattr(parsed.dtype, "tz", None)
-    return parsed.dt.tz_localize(None) if tz is not None else parsed
+    # raises TypeError. Filter out strings that don't look like timestamps.
+    values = pd.Series(values)
+    is_valid = values.astype("string").str.match(r"^\d{4}-\d{2}-\d{2}|^\d{1,2}[/-]")
+    is_valid = is_valid.fillna(False)
+    to_parse = values[is_valid]
+    parsed = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+    if not to_parse.empty:
+        parsed.loc[is_valid] = pd.to_datetime(
+            to_parse, format="mixed", errors="coerce", utc=True
+        )
+        tz = getattr(parsed.dtype, "tz", None)
+        if tz is not None:
+            parsed = parsed.dt.tz_localize(None)
+    return parsed
 
 
 @st.cache_data(ttl=CACHE_TTL, show_spinner=False)

@@ -18,7 +18,7 @@ if df.empty:
 dated = df[df["date"].notna()]
 undated = df[df["date"].isna()]
 
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 if dated.empty:
     date_range = ()
     col1.warning("No readable dates")
@@ -35,6 +35,9 @@ categories = col2.multiselect(
 )
 submitters = col3.multiselect(
     "Submitter", options=sorted(df["submitter"].dropna().unique()), default=None
+)
+currencies = col4.multiselect(
+    "Currency", options=sorted(df["currency"].dropna().unique()), default=None
 )
 
 amounts = df["total"].dropna()
@@ -59,11 +62,13 @@ if categories:
     filtered = filtered[filtered["category"].map(normalise_category).isin(categories)]
 if submitters:
     filtered = filtered[filtered["submitter"].isin(submitters)]
+if currencies:
+    filtered = filtered[filtered["currency"].isin(currencies)]
 
 st.caption(f"Showing {len(filtered)} of {len(df)} receipts.")
 
 st.dataframe(
-    filtered[["receipt_id", "date", "merchant", "category", "submitter", "total", "verdict", "status"]],
+    filtered[["receipt_id", "date", "merchant", "category", "submitter", "total", "currency", "verdict", "status"]],
     use_container_width=True,
 )
 

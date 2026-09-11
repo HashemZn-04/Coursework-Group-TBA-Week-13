@@ -39,8 +39,7 @@ def render_forecast(expenses: pd.DataFrame, currency: str,
         point.metric(f"Forecast — {result['forecast_month']}",
                      format_money(result["forecast"], code))
         band.metric("Indicative range",
-                    f"{format_money(result['range']['low'], code)} – "
-                    f"{format_money(result['range']['high'], code)}")
+                    f"{format_money(result['range']['low'], code)}–{format_money(result['range']['high'], code)}")
         baseline.metric(f"Last {result['baseline']['months']} months, average",
                         format_money(result["baseline"]["value"], code))
 
